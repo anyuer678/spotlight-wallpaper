@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="night">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>聚光壁纸 · 控制面板</title>
+<!--
+  ============================================================
+  聚光壁纸 · 控制面板 · 界面
+
+  这个文件是自包含的：样式、脚本全在里面，不加载任何外部资源
+  （没有 CDN 字体、没有 JS 框架）。断网也照常工作。
+
+  设计语言参考 kb-ui：一切视觉常量都收敛成 :root 上的 CSS 变量，
+  换主题 = 换一组变量（<html data-theme>），组件本身一行不用改。
+
+  和后端的分工：
+      本文件    只负责"显示 + 收集意图"
+      panel.pyw 负责"读写配置、解码图片、合成预览、开系统对话框"
+  ============================================================
+-->
+<style>
+/* ============================================================ 设计 token */
+:root {
+  --r-xs: 4px;  --r-s: 6px;  --r-m: 10px;  --r-l: 14px;  --r-full: 999px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 22px; --sp-6: 30px;
+  --fs-xs: 11px; --fs-s: 12px; --fs-m: 13px; --fs-l: 15px; --fs-xl: 19px;
+  --font: "Microsoft YaHei UI", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", Consolas, "SFMono-Regular", monospace;
+  --dur: 160ms;
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --density: 1;
+}
+
+/* 主题：每组就是一套完整变量。加主题 = 加一段 [data-theme=...] */
+[data-theme="night"] {
+  --bg: #0d1015; --card: #161a22; --elev: #1e232d; --input: #0a0c11;
+  --line: #262c38; --line-hi: #37405030;
+  --fg: #e8e9ee; --fg-dim: #9aa2b4; --fg-mute: #6a7285;
+  --accent: #d3a45f; --accent-hi: #e8bf80; --accent-fg: #1b1206; --accent-soft: #d3a45f1f;
+  --ok: #63c088; --warn: #d9a54a; --err: #e2705f; --info: #6aa6e0;
+  --shadow: 0 1px 2px #00000060, 0 8px 24px #00000040;
+}
+[data-theme="violet"] {
+  --bg: #0f0d17; --card: #181527; --elev: #211d34; --input: #0b0913;
+  --line: #2b2545; --line-hi: #4a3f7a40;
+  --fg: #eae7f5; --fg-dim: #a79fc4; --fg-mute: #776e96;
+  --accent: #a78bfa; --accent-hi: #c4b5fd; --accent-fg: #1a1030; --accent-soft: #a78bfa1f;
+  --ok: #63c088; --warn: #d9a54a; --err: #e2705f; --info: #6aa6e0;
+  --shadow: 0 1px 2px #00000070, 0 8px 24px #00000050;
+}
+[data-theme="ink"] {
+  --bg: #101315; --card: #191d21; --elev: #21262b; --input: #0b0e10;
+  --line: #292f35; --line-hi: #3c454d30;
+  --fg: #e6eaed; --fg-dim: #98a3ac; --fg-mute: #6b757e;
+  --accent: #5ec8c0; --accent-hi: #86ded7; --accent-fg: #04201f; --accent-soft: #5ec8c01f;
+  --ok: #63c088; --warn: #d9a54a; --err: #e2705f; --info: #6aa6e0;
+  --shadow: 0 1px 2px #00000060, 0 8px 24px #00000040;
+}
+[data-theme="light"] {
+  --bg: #f4f5f8; --card: #ffffff; --elev: #ffffff; --input: #f0f1f5;
+  --line: #e2e5ec; --line-hi: #cfd5e030;
+  --fg: #1c2027; --fg-dim: #5c6472; --fg-mute: #8b93a1;
+  --accent: #6d5bd0; --accent-hi: #8574e0; --accent-fg: #ffffff; --accent-soft: #6d5bd014;
+  --ok: #2f9e63; --warn: #b8801f; --err: #cf4b3a; --info: #3a7fc4;
+  --shadow: 0 1px 2px #12141c12, 0 8px 24px #12141c0f;
+}
+
+/* ============================================================ 基础 */
+* { box-sizing: border-box; }
+/* 面板永远是一屏：滚动只该发生在两列内部。
+   html 上也要写 —— 只写 body 的话，body 的 overflow 会被"上缴"给视口、
+   body 自己算成 visible，滚轮从列里滚到头就会顺着链子爬到根上。 */
+html, body { height: 100%; overflow: hidden; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: var(--fs-m)/1.55 var(--font);
+  overflow: hidden;                       /* 滚动交给两列自己管 */
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: var(--accent-soft); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mono { font-family: var(--mono); font-size: var(--fs-xs); }
+.dim { color: var(--fg-dim); }
+.mute { color: var(--fg-mute); }
+.hidden { display: none !important; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--line); border-radius: var(--r-full);
+  border: 3px solid transparent; background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-mute); background-clip: content-box; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================ 布局 */
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+.topbar {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--card); flex: none;
+}
+.brand { display: flex; align-items: baseline; gap: var(--sp-2); }
+.brand h1 { font-size: var(--fs-l); margin: 0; font-weight: 700; letter-spacing: .2px; }
+.brand .sub { font-size: var(--fs-s); color: var(--accent); }
+.topbar .spacer { flex: 1; }
+
+.layout {
+  flex: 1; min-height: 0;                     /* 关键：不写 min-height 子元素不肯滚 */
+  display: grid; grid-template-columns: minmax(330px, 380px) 1fr;
+  grid-template-rows: minmax(0, 1fr);         /* 关键：行高钉死在可用高度，否则右列内容会把行撑到几千 px */
+  gap: var(--sp-4); padding: var(--sp-4) var(--sp-5) var(--sp-5);
+  overflow: hidden;
+}
+.col { min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--sp-2); }
+/* 右列也要能滚：预览是主角占掉大半高度，日志卡片保底 300px（见 .log），
+   窗口不够高时右列内部滚 —— 和左列行为一致；窗口富余时日志自动撑大。 */
+.col-right { display: flex; flex-direction: column; gap: var(--sp-4);
+             min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: var(--sp-2); }
+/* 右列卡片不许被压扁（flex 默认 shrink 会把预览画布裁掉一截，滚动就失效了）；
+   间距全交给 gap —— .card 自带的 margin-bottom 会和 gap 双份叠加
+   （卡片间 32px、末尾还挂 16px），这里归零。 */
+.col-right > .card { flex-shrink: 0; margin-bottom: 0; }
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; grid-template-rows: none; overflow-y: auto; }
+  .col { overflow: visible; }
+  .col-right { overflow: visible; }
+  .log { min-height: 300px; }                /* 单列布局没有"剩余高度"可分，给个安心高度 */
+}
+
+/* ============================================================ 卡片 */
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r-l); box-shadow: var(--shadow);
+  margin-bottom: var(--sp-4); overflow: hidden;
+}
+.card-head {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--line);
+}
+.card-head h2 {
+  font-size: var(--fs-s); margin: 0; font-weight: 700;
+  letter-spacing: .6px; text-transform: uppercase; color: var(--fg-dim);
+}
+.card-head .spacer { flex: 1; }
+.card-body { padding: var(--sp-4); }
+.card-body + .card-body { border-top: 1px solid var(--line); }
+
+/* ============================================================ 按钮 */
+.btn {
+  appearance: none; border: 1px solid var(--line); background: var(--elev);
+  color: var(--fg); font: inherit; font-size: var(--fs-s);
+  padding: 6px 12px; border-radius: var(--r-s); cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              transform var(--dur) var(--ease), color var(--dur) var(--ease);
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 6px;
+}
+.btn:hover { background: var(--line); border-color: var(--fg-mute); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled] { opacity: .45; cursor: not-allowed; transform: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.btn.primary:hover { background: var(--accent-hi); border-color: var(--accent-hi); }
+.btn.danger { color: var(--err); border-color: #e2705f44; background: #e2705f14; }
+.btn.danger:hover { background: #e2705f26; border-color: var(--err); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--fg-dim); }
+.btn.ghost:hover { background: var(--elev); color: var(--fg); }
+.btn.tiny { padding: 3px 8px; font-size: var(--fs-xs); }
+.btn-row { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+/* ============================================================ 分段控件 */
+.seg {
+  display: inline-flex; padding: 2px; gap: 2px;
+  background: var(--input); border: 1px solid var(--line); border-radius: var(--r-s);
+}
+.seg button {
+  appearance: none; border: 0; background: transparent; color: var(--fg-dim);
+  font: inherit; font-size: var(--fs-xs); padding: 4px 10px; cursor: pointer;
+  border-radius: calc(var(--r-s) - 1px); transition: all var(--dur) var(--ease);
+}
+.seg button:hover { color: var(--fg); }
+.seg button.on { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+
+/* ============================================================ 状态胶囊 */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: var(--r-full);
+  font-size: var(--fs-xs); border: 1px solid var(--line); background: var(--input);
+  color: var(--fg-dim); white-space: nowrap;
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-mute); flex: none; }
+.pill.ok   { border-color: #63c08844; color: var(--ok); }
+.pill.ok   .dot { background: var(--ok); box-shadow: 0 0 0 3px #63c0881f; }
+.pill.bad  { border-color: #e2705f44; color: var(--err); }
+.pill.bad  .dot { background: var(--err); box-shadow: 0 0 0 3px #e2705f1f; }
+.pill.warn { border-color: #d9a54a44; color: var(--warn); }
+.pill.warn .dot { background: var(--warn); box-shadow: 0 0 0 3px #d9a54a1f; }
+
+/* ============================================================ 图片行 */
+.imgrow {
+  display: flex; gap: var(--sp-3); align-items: flex-start;
+  padding: var(--sp-3); border: 1px solid var(--line);
+  border-radius: var(--r-m); background: var(--elev);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.imgrow + .imgrow { margin-top: var(--sp-3); }
+.imgrow.drop { border-color: var(--accent); background: var(--accent-soft); }
+.thumb {
+  width: 84px; height: 52px; flex: none; border-radius: var(--r-xs);
+  object-fit: cover; background: var(--input); border: 1px solid var(--line);
+  display: block;
+}
+.imgmeta { flex: 1; min-width: 0; }
+.imgmeta .t { font-weight: 600; font-size: var(--fs-s); display: flex; align-items: center; gap: 6px; }
+.imgmeta .n {
+  font-size: var(--fs-s); color: var(--fg); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.imgmeta .p {
+  font-family: var(--mono); font-size: var(--fs-xs); color: var(--fg-mute);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl;
+  text-align: left; margin-top: 2px;
+}
+.imgmeta .acts { margin-top: 6px; display: flex; gap: 6px; align-items: center; }
+
+/* ============================================================ 滑块 */
+.ctl { margin-bottom: 13px; }
+.ctl:last-child { margin-bottom: 0; }
+.ctl-head { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 6px; }
+.ctl-head .name { font-size: var(--fs-s); color: var(--fg-dim); }
+.ctl-head .spacer { flex: 1; }
+.val {
+  font-family: var(--mono); font-size: var(--fs-s); color: var(--accent);
+  /* 静止时也要留一道看得见的边：它是"点进去能输精确值"的入口，
+     完全没有边框的话它就只是一串彩色数字，没人会想到那能点。 */
+  background: var(--accent-soft); border: 1px solid var(--line);
+  border-radius: var(--r-xs); padding: 1px 7px; min-width: 62px;
+  text-align: right; cursor: text; transition: all var(--dur) var(--ease);
+}
+.val:hover { border-color: var(--accent); }
+.val input {
+  width: 100%; background: transparent; border: 0; color: inherit;
+  font: inherit; text-align: right; outline: none; padding: 0;
+}
+
+.slider {
+  position: relative; height: 22px; display: flex; align-items: center;
+  cursor: pointer; touch-action: none;
+}
+.slider .track {
+  position: absolute; left: 0; right: 0; height: 5px; border-radius: var(--r-full);
+  background: var(--input); border: 1px solid var(--line);
+}
+.slider .fill {
+  position: absolute; left: 0; height: 5px; border-radius: var(--r-full);
+  background: var(--accent); pointer-events: none;
+}
+.slider .knob {
+  position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent);
+  box-shadow: 0 1px 4px #0006; pointer-events: none;
+  transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.slider:hover .knob { transform: scale(1.14); }
+.slider.drag .knob { transform: scale(1.24); box-shadow: 0 0 0 6px var(--accent-soft); }
+.slider:focus-visible .knob { box-shadow: 0 0 0 6px var(--accent-soft); }
+.slider .ticks {
+  position: absolute; left: 0; right: 0; top: 20px; display: flex;
+  justify-content: space-between; font-size: 10px; color: var(--fg-mute);
+  font-family: var(--mono); pointer-events: none;
+}
+.ctl .hint { font-size: var(--fs-xs); color: var(--fg-mute); margin-top: 14px; }
+
+/* ============================================================ 开关 */
+.sw {
+  display: flex; align-items: flex-start; gap: var(--sp-3);
+  padding: var(--sp-3) 0; cursor: pointer;
+  /* 这一句不能删。里面的 <input> 是绝对定位的，一旦没有定位祖先，它的
+     包含块会一路升到文档，于是绕过 .col / .layout 的裁剪，在视口下方
+     顶出 ~400px 的"隐形内容"（实测文档高 1227 而视口只有 830）。
+     浏览器在点击时会把获得焦点的 checkbox 滚进视野 → 整个界面（连标题栏）
+     整体窜上去 397px。看着就是"点一下开关界面就变形"。 */
+  position: relative;
+}
+.sw + .sw { border-top: 1px solid var(--line); }
+.sw .swbox {
+  flex: none; width: 38px; height: 21px; border-radius: var(--r-full);
+  background: var(--input); border: 1px solid var(--line); position: relative;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease);
+  margin-top: 1px;
+}
+.sw .swbox::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 15px; height: 15px;
+  border-radius: 50%; background: var(--fg-mute);
+  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+/* 藏起来的 checkbox：显式钉在开关自己的左上角、缩成 1px。
+   不写死盒子的话，它是用"静态位置"参与溢出计算的 —— 而那个位置是按默认
+   复选框尺寸算的，会跟着右边那列文字一起往下跑，越深的开关跑得越远。 */
+.sw input {
+  position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+  margin: 0; opacity: 0; pointer-events: none;
+}
+.sw.on .swbox { background: var(--accent); border-color: var(--accent); }
+.sw.on .swbox::after { transform: translateX(17px); background: #fff; }
+/* checkbox 本身只有 1px 且全透明，键盘 Tab 过来时得给个看得见的落点 */
+.sw:focus-within .swbox { box-shadow: 0 0 0 3px var(--accent-soft); }
+/* .txt / .t / .d 都是 <span>，默认是行内元素 —— 不显式改成块级的话，
+   标题和说明会挤在同一行糊成一句话（截图上看着就像文案没写完）。 */
+.sw .txt { display: block; flex: 1; min-width: 0; }
+.sw .txt .t { display: block; font-size: var(--fs-s); color: var(--fg-dim); }
+.sw .txt .d {
+  display: block; font-size: var(--fs-xs); color: var(--fg-mute);
+  margin-top: 2px; line-height: 1.5;
+}
+.sw.on .txt .t { color: var(--fg); }
+
+/* ============================================================ 预览 */
+.pv-wrap { position: relative; }
+#pv {
+  display: block; width: 100%; height: auto; border-radius: var(--r-m);
+  border: 1px solid var(--line); background: var(--input); cursor: crosshair;
+  image-rendering: auto;
+}
+.pv-badge {
+  position: absolute; right: 8px; top: 8px; display: flex; gap: 6px;
+  pointer-events: none;
+}
+.pv-badge span {
+  font-family: var(--mono); font-size: 10px; padding: 2px 7px;
+  border-radius: var(--r-full); background: #000000aa; color: #e8e9ee;
+  border: 1px solid #ffffff20; backdrop-filter: blur(4px);
+}
+.pv-foot {
+  display: flex; align-items: center; gap: var(--sp-2);
+  margin-top: var(--sp-3); flex-wrap: wrap;
+}
+
+/* ============================================================ 日志 */
+.log {
+  font-family: var(--mono); font-size: var(--fs-s); line-height: 1.7;
+  background: var(--input); border: 1px solid var(--line); border-radius: var(--r-m);
+  padding: var(--sp-3); flex: 1; min-height: 0; align-self: stretch; overflow: auto;
+  white-space: pre-wrap; word-break: break-all; color: var(--fg-dim);
+}
+.log .l-ok   { color: var(--ok); }
+.log .l-warn { color: var(--warn); }
+.log .l-err  { color: var(--err); }
+.log .l-time { color: var(--fg-mute); }
+
+/* ============================================================ 提示 */
+#toasts {
+  position: fixed; right: 18px; bottom: 18px; display: flex;
+  flex-direction: column; gap: var(--sp-2); z-index: 50; max-width: 420px;
+}
+.toast {
+  background: var(--card); border: 1px solid var(--line); border-left-width: 3px;
+  border-radius: var(--r-s); box-shadow: var(--shadow);
+  padding: 9px 13px; font-size: var(--fs-s);
+  animation: slidein 220ms var(--ease);
+}
+.toast.warn { border-left-color: var(--warn); }
+.toast.err  { border-left-color: var(--err); }
+.toast.ok   { border-left-color: var(--ok); }
+@keyframes slidein { from { opacity: 0; transform: translateY(8px); } }
+
+#offline {
+  position: fixed; inset: 0; z-index: 90; display: flex;
+  align-items: center; justify-content: center; flex-direction: column;
+  gap: var(--sp-3); background: #000000cc; backdrop-filter: blur(6px);
+  color: #fff; text-align: center; padding: var(--sp-6);
+}
+#offline h2 { margin: 0; font-size: var(--fs-xl); }
+#offline p { margin: 0; color: #ffffffb0; font-size: var(--fs-m); max-width: 460px; }
+
+/* ---- 系统壁纸变更提示条（规则 B）------------------------------------
+   用户在系统设置里换了壁纸时，这里说一句：屏幕没变是正常的，是程序在盖着它。
+   这一条不改任何行为（不自动停壁纸、不自动露出桌面）—— 只把"发生了什么"讲清楚，
+   停不停由用户自己按那个按钮决定。 */
+#syswp {
+  display: flex; align-items: center; gap: var(--sp-3);
+  margin: 0 var(--sp-5) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--warn); border-radius: var(--r-m);
+  background: var(--card); box-shadow: var(--shadow);
+  font-size: var(--fs-m); color: var(--fg);
+}
+#syswp.hidden { display: none; }
+#syswp .sw-text { flex: 1; min-width: 0; }
+#syswp .sw-text b { font-weight: 600; }
+#syswp .sw-text .mono { color: var(--fg-dim); word-break: break-all; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <h1>聚光壁纸</h1>
+      <span class="sub">控制面板</span>
+    </div>
+    <span id="st-run" class="pill"><span class="dot"></span><span class="t">检查中…</span></span>
+    <span id="st-attach" class="pill"><span class="dot"></span><span class="t">—</span></span>
+    <span id="st-cpu" class="pill"><span class="t">CPU —</span></span>
+    <div class="spacer"></div>
+    <div class="seg" id="seg-theme"></div>
+    <button class="btn ghost tiny" id="btn-tray" title="把面板收进托盘（单击托盘图标可以再打开）">最小化到托盘</button>
+    <button class="btn ghost tiny" id="btn-quit"
+            title="退出面板（会先问一句：壁纸要不要一起停）">退出面板</button>
+  </header>
+
+  <!-- 规则 B：系统壁纸被换掉时的提示条。默认藏着，
+       state.system_wallpaper 说"该提示"才显示。 -->
+  <div id="syswp" class="hidden">
+    <span class="sw-text">
+      系统壁纸已改为 <b class="mono" id="syswp-name">—</b>
+      —— 屏幕上看不出来是正常的：本程序正盖着它。
+    </span>
+    <button class="btn primary tiny" id="btn-syswp-stop">停止壁纸，显示系统壁纸</button>
+    <button class="btn ghost tiny" id="btn-syswp-ok">知道了</button>
+  </div>
+
+  <main class="layout">
+
+    <!-- ================= 左列 ================= -->
+    <section class="col col-left">
+
+      <div class="card">
+        <div class="card-head">
+          <h2>图片</h2>
+          <div class="spacer"></div>
+          <button class="btn ghost tiny" id="btn-reload" title="路径没变、但文件内容被换掉时用这个">重新读取</button>
+        </div>
+        <div class="card-body" id="images"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>效果</h2>
+          <div class="spacer"></div>
+          <span class="mute" style="font-size:var(--fs-xs)">拖动即时生效</span>
+        </div>
+        <div class="card-body" id="effects"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>开关</h2></div>
+        <div class="card-body" id="switches"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>操作</h2></div>
+        <div class="card-body">
+          <div class="btn-row">
+            <button class="btn primary" id="btn-run">启动壁纸</button>
+            <button class="btn" id="btn-restart">重启</button>
+            <button class="btn" id="btn-reset">恢复默认效果</button>
+            <button class="btn" id="btn-folder">打开文件夹</button>
+          </div>
+          <p class="mute" style="font-size:var(--fs-xs);margin:12px 0 0">
+            面板改的每一项都会立刻写进 <span class="mono">wallpaper-config.json</span>，
+            壁纸进程约 0.1 秒内套用，全程不用重启。
+          </p>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ================= 右列 ================= -->
+    <section class="col col-right">
+
+      <div class="card">
+        <div class="card-head">
+          <h2>实时预览</h2>
+          <div class="spacer"></div>
+          <div class="seg" id="seg-anchor"></div>
+          <div class="seg" id="seg-zoom"></div>
+        </div>
+        <div class="card-body">
+          <div class="pv-wrap">
+            <canvas id="pv" width="480" height="312"></canvas>
+            <div class="pv-badge">
+              <span id="pv-zoom">—</span>
+              <span id="pv-ms">—</span>
+            </div>
+          </div>
+          <div class="pv-foot">
+            <span class="mute" style="font-size:var(--fs-xs)">
+              在预览上拖动＝移动光斑；光斑拖到画面边缘时的裁剪与桌面上完全一致。
+            </span>
+            <div class="spacer" style="flex:1"></div>
+            <span class="mute mono" id="pv-pos">—</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="flex:1 0 0;display:flex;flex-direction:column;min-height:340px">
+        <div class="card-head">
+          <h2>诊断日志</h2>
+          <div class="spacer"></div>
+          <label class="mute" style="font-size:var(--fs-xs);display:flex;gap:6px;align-items:center;cursor:pointer">
+            <input type="checkbox" id="log-auto" checked> 自动刷新
+          </label>
+          <button class="btn ghost tiny" id="btn-logfile">打开文件</button>
+          <button class="btn ghost tiny" id="btn-logrefresh">刷新</button>
+        </div>
+        <div class="card-body" style="flex:1;min-height:0;display:flex">
+          <div class="log" id="log" style="flex:1"></div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<div id="toasts"></div>
+
+<div id="offline" class="hidden">
+  <h2>面板服务已断开</h2>
+  <p>界面还在，但背后那个只监听本机的小服务已经退出了（多半是面板进程被关掉了）。
+     直接关掉这个窗口，再双击 <b>open-panel.bat</b> 重新打开就好。</p>
+  <button class="btn primary" onclick="location.reload()">重新连接</button>
+</div>
+
+<script>
+/* ================================================================ 常量 */
+const CW = 480, CH = 312;            // 预览画布的内在尺寸（屏幕像素由取景框决定）
+const SETTLE_MS = 220;               // 滑块改动攒多久再写盘
+
+const SLIDERS = [
+  { k: 'size',    name: '光圈大小', lo: 60,   hi: 1200, step: 1,    unit: 'px',
+    fmt: v => Math.round(v) + ' px',
+    hint: '光斑直径。你这块屏可以放心试 480–560。' },
+  { k: 'feather', name: '边缘柔和', lo: 0,    hi: 100,  step: 1,    unit: '',
+    fmt: v => Math.round(v),
+    hint: '0 是硬边，100 从圆心就开始渐隐。45 左右最像手电筒。' },
+  { k: 'glow',    name: '光晕强度', lo: 0,    hi: 100,  step: 1,    unit: '',
+    fmt: v => Math.round(v),
+    hint: '光斑外面那圈亮雾。调到 0 就完全没有。' },
+  { k: 'follow',  name: '跟随速度', lo: 0.02, hi: 0.90, step: 0.01, unit: '%',
+    fmt: v => Math.round(v * 100) + '%',
+    hint: '越小越"黏"、拖尾越明显；越大越贴着鼠标走。' },
+  { k: 'fps',     name: '帧率上限', lo: 20,   hi: 144,  step: 1,    unit: 'fps',
+    fmt: v => Math.round(v) + ' fps',
+    hint: '改渲染路径后单帧只要约 3ms，60 也只占单核两成左右。' },
+];
+
+const SWITCHES = [
+  { k: 'pause_when_covered', t: '光标离开桌面时冻住光斑',
+    d: '建议开着：光标压到窗口上时，光斑停在原地不动、也不重绘，几乎不占 CPU。'
+     + '关掉则照常跟着光标走（CPU 高一些）。' },
+  { k: 'drift', t: '鼠标静止后自动漂移',
+    d: '好看，但会一直重绘、一直吃 CPU。默认关。' },
+  { k: 'verbose', t: '在日志里记录帧率',
+    d: '每 5 秒写一行实测帧率，排查性能问题时才需要。' },
+];
+
+const ANCHORS = [
+  { k: 'center',   t: '居中' },
+  { k: 'topleft',  t: '左上' },
+  { k: 'bottomright', t: '右下' },
+];
+
+const THEMES = [
+  { k: 'night',  t: '暗夜金' },
+  { k: 'violet', t: '暗紫' },
+  { k: 'ink',    t: '青墨' },
+  { k: 'light',  t: '浅色' },
+];
+
+/* ================================================================ 状态 */
+let state = null;          // 后端最近一次汇报的完整状态
+let cfg = {};              // 界面上的值（可能比磁盘新）
+let anchor = 'center';
+let zoomLock = null;       // null=自动；1=1:1
+let spot = { x: 0, y: 0 }; // 光斑在画布里的位置
+let spotInit = false;
+let theme = localStorage.getItem('panel-theme') || 'night';
+let offline = 0;
+
+/* ================================================================ 小工具 */
+const $ = id => document.getElementById(id);
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function fmtBytes(n) {
+  if (!n) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+async function api(path, opt) {
+  try {
+    const r = await fetch(path, opt);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    offline = 0;
+    $('offline').classList.add('hidden');
+    return j;
+  } catch (e) {
+    offline++;
+    if (offline >= 3) $('offline').classList.remove('hidden');
+    throw e;
+  }
+}
+function post(path, body) {
+  return api(path, {
+    method: 'POST',
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+let toastId = 0;
+function toast(text, kind) {
+  const n = el('div', 'toast ' + (kind || ''), text);
+  n.dataset.id = ++toastId;
+  $('toasts').appendChild(n);
+  setTimeout(() => { n.style.opacity = '0'; n.style.transition = 'opacity .25s'; }, 3600);
+  setTimeout(() => n.remove(), 3950);
+}
+
+/* ================================================================ 写配置 */
+const dirty = new Set();
+let sendTimer = null;
+
+function push(k, v, immediate) {
+  if (cfg[k] === v) return;
+  cfg[k] = v;
+  dirty.add(k);
+  clearTimeout(sendTimer);
+  sendTimer = setTimeout(flush, immediate ? 0 : SETTLE_MS);
+}
+
+async function flush() {
+  if (!dirty.size) return;
+  const body = {};
+  for (const k of dirty) body[k] = cfg[k];
+  dirty.clear();
+  try {
+    const r = await post('/api/config', body);
+    if (r.notes && r.notes.length) toast(r.notes.join('；'), 'warn');
+    // 后端回话里的 config 是夹取过的权威值。只把它用在没在拖的控件上，
+    // 否则会跟用户的手抢方向盘 —— 拖到一半被弹回去最难受。
+    const keep = cfg.size;                     // 记住手上的值
+    state = r.state;
+    for (const k in r.config) {
+      if (!dragging.has(k) && !dirty.has(k)) cfg[k] = r.config[k];
+    }
+    cfg.size = dragging.has('size') ? keep : r.config.size;
+    paintValues();
+    paintStatus();
+    paintImages();
+    schedulePreview();
+  } catch (e) { /* 断网/服务没了，离线遮罩已经提示了 */ }
+}
+
+/* ================================================================ 滑块 */
+const dragging = new Set();
+
+function buildSliders() {
+  const host = $('effects');
+  host.innerHTML = '';
+  for (const s of SLIDERS) {
+    const box = el('div', 'ctl');
+    const head = el('div', 'ctl-head');
+    head.appendChild(el('span', 'name', s.name));
+    head.appendChild(el('span', 'spacer'));
+    const val = el('span', 'val');
+    val.dataset.k = s.k;
+    head.appendChild(val);
+    box.appendChild(head);
+
+    const sl = el('div', 'slider');
+    sl.tabIndex = 0;
+    sl.dataset.k = s.k;
+    sl.appendChild(el('div', 'track'));
+    const fill = el('div', 'fill');
+    const knob = el('div', 'knob');
+    sl.appendChild(fill); sl.appendChild(knob);
+    box.appendChild(sl);
+
+    const hint = el('div', 'hint', s.hint);
+    box.appendChild(hint);
+    host.appendChild(box);
+
+    const setFromX = (clientX, commit) => {
+      const r = sl.getBoundingClientRect();
+      const t = clamp((clientX - r.left) / Math.max(1, r.width), 0, 1);
+      let v = s.lo + t * (s.hi - s.lo);
+      v = Math.round(v / s.step) * s.step;
+      v = clamp(Number(v.toFixed(4)), s.lo, s.hi);
+      push(s.k, v, !!commit);
+      paintSlider(s);
+    };
+
+    sl.addEventListener('pointerdown', e => {
+      sl.setPointerCapture(e.pointerId);
+      dragging.add(s.k);
+      sl.classList.add('drag');
+      setFromX(e.clientX, false);
+      e.preventDefault();
+    });
+    sl.addEventListener('pointermove', e => {
+      if (!dragging.has(s.k)) return;
+      setFromX(e.clientX, false);
+    });
+    const end = e => {
+      if (!dragging.has(s.k)) return;
+      dragging.delete(s.k);
+      sl.classList.remove('drag');
+      try { sl.releasePointerCapture(e.pointerId); } catch (_) {}
+    };
+    sl.addEventListener('pointerup', end);
+    sl.addEventListener('pointercancel', end);
+
+    // 键盘微调：方向键 ±1 步，Shift ±10 步。滑块这种东西，
+    // 光能拖是没法"精确调到 380"的。
+    sl.addEventListener('keydown', e => {
+      const big = e.shiftKey ? 10 : 1;
+      let d = 0;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowUp') d = s.step * big;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') d = -s.step * big;
+      else if (e.key === 'Home') { push(s.k, s.lo, true); paintSlider(s); e.preventDefault(); return; }
+      else if (e.key === 'End') { push(s.k, s.hi, true); paintSlider(s); e.preventDefault(); return; }
+      else return;
+      e.preventDefault();
+      const v = clamp(Number((cfg[s.k] + d).toFixed(4)), s.lo, s.hi);
+      push(s.k, v, true);
+      paintSlider(s);
+    });
+    // 双击把手复位到该项默认值
+    sl.addEventListener('dblclick', () => {
+      if (state && state.defaults) {
+        push(s.k, state.defaults[s.k], true);
+        paintSlider(s);
+        toast(s.name + ' 已恢复默认', 'ok');
+      }
+    });
+  }
+}
+
+function paintSlider(s) {
+  const sl = document.querySelector('.slider[data-k="' + s.k + '"]');
+  if (!sl) return;
+  const v = clamp(Number(cfg[s.k]), s.lo, s.hi);
+  const t = (v - s.lo) / (s.hi - s.lo);
+  const w = sl.clientWidth || 1;
+  const x = t * w;
+  sl.querySelector('.fill').style.width = x + 'px';
+  const knob = sl.querySelector('.knob');
+  knob.style.left = (x - 8) + 'px';
+  const val = document.querySelector('.val[data-k="' + s.k + '"]');
+  if (val && val.dataset.editing !== '1') val.textContent = s.fmt(v);
+}
+
+function makeValEditable(s) {
+  const val = document.querySelector('.val[data-k="' + s.k + '"]');
+  if (!val) return;
+  val.title = '点一下可以输入精确值；双击滑块把手恢复默认';
+  val.addEventListener('click', () => {
+    if (val.dataset.editing === '1') return;
+    const cur = cfg[s.k];
+    val.dataset.editing = '1';
+    val.innerHTML = '';
+    const inp = el('input');
+    inp.value = (s.k === 'follow') ? cur : Math.round(cur);
+    val.appendChild(inp);
+    inp.focus(); inp.select();
+    const done = (ok) => {
+      val.dataset.editing = '0';
+      if (ok) {
+        let v = parseFloat(inp.value);
+        if (s.k === 'follow' && v > 1) v = v / 100;     // 允许输 45 表示 45%
+        if (isFinite(v)) {
+          push(s.k, clamp(v, s.lo, s.hi), true);
+        } else {
+          toast('「' + s.name + '」只接受数字', 'warn');
+        }
+      }
+      paintSlider(s); paintValues();
+    };
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); done(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      e.stopPropagation();
+    });
+    inp.addEventListener('blur', () => done(true));
+  });
+}
+
+function paintValues() {
+  for (const s of SLIDERS) paintSlider(s);
+}
+
+/* ================================================================ 开关 */
+function buildSwitches() {
+  const host = $('switches');
+  host.innerHTML = '';
+  for (const s of SWITCHES) {
+    const lab = el('label', 'sw');
+    const box = el('span', 'swbox');
+    const txt = el('span', 'txt');
+    txt.appendChild(el('span', 't', s.t));
+    txt.appendChild(el('span', 'd', s.d));
+    const inp = el('input'); inp.type = 'checkbox'; inp.dataset.k = s.k;
+    lab.appendChild(box); lab.appendChild(txt); lab.appendChild(inp);
+    host.appendChild(lab);
+    inp.addEventListener('change', () => {
+      push(s.k, inp.checked, true);
+      lab.classList.toggle('on', inp.checked);
+    });
+  }
+}
+
+/* ================================================================ 图片 */
+function buildImages() {
+  const host = $('images');
+  host.innerHTML = '';
+  for (const side of ['outer', 'inner']) {
+    const row = el('div', 'imgrow');
+    row.dataset.side = side;
+    const im = el('img', 'thumb');
+    im.dataset.side = side;
+    const meta = el('div', 'imgmeta');
+    const t = el('div', 't');
+    t.appendChild(el('span', null, side === 'outer' ? '光斑外' : '光斑内'));
+    const tag = el('span', 'pill'); tag.dataset.tag = side;
+    t.appendChild(tag);
+    const n = el('div', 'n'); n.dataset.f = 'name';
+    const p = el('div', 'p'); p.dataset.f = 'path';
+    const acts = el('div', 'acts');
+    const pick = el('button', 'btn tiny', '选择…');
+    const info = el('span', 'mute mono');
+    acts.appendChild(pick); acts.appendChild(info);
+    meta.appendChild(t); meta.appendChild(n); meta.appendChild(p); meta.appendChild(acts);
+    row.appendChild(im); row.appendChild(meta);
+    host.appendChild(row);
+
+    pick.addEventListener('click', async () => {
+      pick.disabled = true; pick.textContent = '等待选择…';
+      try {
+        const r = await post('/api/pick?side=' + side);
+        if (r.canceled) toast('已取消', 'warn');
+        else {
+          state = r.state; cfg = Object.assign({}, r.state.config);
+          paintAll();
+          toast('已换成 ' + (r.path.split(/[\\/]/).pop()), 'ok');
+        }
+      } catch (e) { toast('选图失败：' + e.message, 'err'); }
+      pick.disabled = false; pick.textContent = '选择…';
+    });
+
+    // 拖一张图进来 = 换图。比"点按钮再在对话框里翻"顺手得多。
+    row.addEventListener('dragover', e => { e.preventDefault(); row.classList.add('drop'); });
+    row.addEventListener('dragleave', () => row.classList.remove('drop'));
+    row.addEventListener('drop', async e => {
+      e.preventDefault();
+      row.classList.remove('drop');
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      if (!/^image\//.test(f.type)) { toast('拖进来的不是图片文件', 'warn'); return; }
+      toast('正在处理 ' + f.name + ' …');
+      try {
+        const r = await api('/api/upload?side=' + side + '&name=' + encodeURIComponent(f.name),
+          { method: 'POST', body: f });
+        state = r.state; cfg = Object.assign({}, r.state.config);
+        paintAll();
+        toast('已替换「' + (side === 'outer' ? '光斑外' : '光斑内') + '」', 'ok');
+      } catch (err) { toast('替换失败：' + err.message, 'err'); }
+    });
+  }
+}
+
+function paintImages() {
+  if (!state || !state.images) return;
+  for (const side of ['outer', 'inner']) {
+    const info = state.images[side];
+    const row = document.querySelector('.imgrow[data-side="' + side + '"]');
+    if (!row) continue;
+    const im = row.querySelector('img.thumb');
+    im.src = '/api/thumb?side=' + side + '&w=168&t=' + Date.now();
+    row.querySelector('[data-f="name"]').textContent = info.exists ? info.name : '未找到，用内置默认图案';
+    row.querySelector('[data-f="path"]').textContent =
+      info.exists ? maskPaths(info.dir) : '';
+    row.querySelector('.mute.mono').textContent = info.exists
+      ? (info.w + '×' + info.h + ' · ' + fmtBytes(info.bytes))
+      : '内置图案 ' + (side === 'outer' ? '深夜蓝' : '暖金');
+    const tag = row.querySelector('[data-tag]');
+    if (info.placeholder) { tag.textContent = '默认'; tag.className = 'pill warn'; }
+    else { tag.textContent = '已启用'; tag.className = 'pill ok'; }
+  }
+}
+
+/* ================================================================ 状态区 */
+function paintStatus() {
+  if (!state) return;
+  const w = state.wallpaper || {};
+  const run = $('st-run'), at = $('st-attach'), cpu = $('st-cpu');
+
+  if (w.alive) {
+    run.className = 'pill ok';
+    run.querySelector('.t').textContent = '运行中 · pid ' + w.pid;
+  } else {
+    run.className = 'pill bad';
+    run.querySelector('.t').textContent = '壁纸未运行';
+  }
+  if (!w.alive) {
+    at.className = 'pill'; at.querySelector('.t').textContent = '—';
+  } else if (w.attached) {
+    at.className = 'pill ok'; at.querySelector('.t').textContent = '已挂到桌面层';
+    at.title = w.mode;
+  } else {
+    at.className = 'pill warn'; at.querySelector('.t').textContent = '未挂到桌面层';
+    at.title = w.mode + (w.note ? '（' + w.note + '）' : '');
+  }
+  const c = w.cpu_percent;
+  cpu.querySelector('.t').textContent = (c == null) ? 'CPU 采样中…'
+    : 'CPU ' + c.toFixed(1) + '%';
+  cpu.className = 'pill' + (c == null ? '' : (c < 25 ? ' ok' : c < 60 ? ' warn' : ' bad'));
+  cpu.title = '壁纸进程占用的单核百分比（两次刷新之间的增量）';
+
+  $('btn-run').textContent = w.alive ? '停止壁纸' : '启动壁纸';
+  $('btn-run').className = 'btn ' + (w.alive ? 'danger' : 'primary');
+
+  // 托盘图标装不上时把按钮停用，而不是让它点了弹出"收不起来"——
+  // 一个能在按下前就看出"这条路不通"的按钮，比事后解释友好得多。
+  const t = state.tray || {};
+  const bt = $('btn-tray');
+  if (bt) {
+    bt.disabled = !t.active;
+    bt.title = t.active
+      ? '把面板收进托盘（单击托盘图标可以再打开）'
+      : '托盘图标没装上，收起来就找不回来了 —— 已停用'
+        + (t.error ? '（' + t.error + '）' : '');
+  }
+
+  // 规则 B：系统壁纸被换掉时亮起提示条。只提示，不改变行为 ——
+  // 屏幕没变是正常的（本程序正盖着它），要看到新壁纸请点条上的按钮。
+  // seen 判据在后端（system_wallpaper.seen，按 changed_at 比对），这里只管显隐。
+  const sw = state.system_wallpaper || {};
+  const bar = $('syswp');
+  if (bar) {
+    if (!sw.path || sw.seen) {
+      bar.classList.add('hidden');
+    } else {
+      $('syswp-name').textContent = sw.name || sw.path;
+      bar.classList.remove('hidden');
+    }
+  }
+}
+
+/* ================================================================ 预览 */
+const pv = $('pv');
+const ctx = pv.getContext('2d');
+const offImg = new Image();
+let pvBusy = false, pvAgain = false;
+
+function autoZoom() {
+  const size = Number(cfg.size) || 380;
+  return zoomLock != null ? zoomLock
+    : Math.min(1, CH * 0.84 / Math.max(80, size * 1.18));
+}
+function zoomNow() { return autoZoom(); }
+
+function boxOf() {
+  const sw = state ? state.screen.w : 1920;
+  const sh = state ? state.screen.h : 1080;
+  //  取景框绝不能顶出屏幕。一顶出去，后端就得把它夹回来；夹完它的宽高比
+  //   就不再是画布的 480:312 了，而后端最后那一步 resize 是硬缩到画布尺寸的 ——
+  //   画面当场被拉扁。实测把 size 拖到 1200（滑块上限）时横向被压 4%，
+  //   而且很难一眼看出来，只觉得"哪里怪怪的"。
+  //   所以先给缩放比兜一个下限：恰好让取景框塞得进屏幕。
+  //   （本机 2560×1600 → 下限 0.195，"适应"最远到 20%，仍然看得到几乎整屏。）
+  const zFloor = Math.max(CW / sw, CH / sh);
+  const z = Math.max(zoomNow(), zFloor);
+  const w = CW / z, h = CH / z;
+  let x0, y0;
+  if (anchor === 'center') { x0 = (sw - w) / 2; y0 = (sh - h) / 2; }
+  else if (anchor === 'topleft') { x0 = 0; y0 = 0; }
+  else { x0 = sw - w; y0 = sh - h; }
+  x0 = clamp(x0, 0, Math.max(0, sw - w));
+  y0 = clamp(y0, 0, Math.max(0, sh - h));
+  return { x0, y0, x1: x0 + w, y1: y0 + h, z };
+}
+function spotScreen() {
+  const b = boxOf();
+  return { x: b.x0 + spot.x / b.z, y: b.y0 + spot.y / b.z };
+}
+
+function schedulePreview() { pvAgain = true; kickPreview(); }
+
+function kickPreview() {
+  if (pvBusy || !state) return;
+  pvAgain = false;
+  pvBusy = true;
+  const b = boxOf();
+  const s = spotScreen();
+  const t0 = performance.now();
+  const q = new URLSearchParams({
+    vw: CW, vh: CH,
+    x0: b.x0.toFixed(2), y0: b.y0.toFixed(2), x1: b.x1.toFixed(2), y1: b.y1.toFixed(2),
+    sx: s.x.toFixed(2), sy: s.y.toFixed(2),
+    size: cfg.size, feather: cfg.feather, glow: cfg.glow,
+  });
+  offImg.onload = () => {
+    ctx.clearRect(0, 0, CW, CH);
+    ctx.drawImage(offImg, 0, 0);
+    pvBusy = false;
+    $('pv-ms').textContent = Math.round(performance.now() - t0) + ' ms';
+    $('pv-zoom').textContent = b.z >= 0.999 ? '实际大小 1:1' : '已缩小到 ' + Math.round(b.z * 100) + '%';
+    $('pv-pos').textContent = '光斑 ' + Math.round(s.x) + ', ' + Math.round(s.y)
+      + '  ·  屏幕 ' + state.screen.w + '×' + state.screen.h;
+    if (pvAgain) kickPreview();
+  };
+  offImg.onerror = () => { pvBusy = false; if (pvAgain) kickPreview(); };
+  offImg.src = '/api/preview?' + q.toString();
+}
+
+pv.addEventListener('pointerdown', e => {
+  pv.setPointerCapture(e.pointerId);
+  moveSpot(e);
+});
+pv.addEventListener('pointermove', e => {
+  if (e.buttons & 1) moveSpot(e);
+});
+pv.addEventListener('pointerup', () => { schedulePreview(); });
+
+function moveSpot(e) {
+  const r = pv.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * CW;
+  const y = (e.clientY - r.top) / r.height * CH;
+  spot = { x: clamp(x, 0, CW), y: clamp(y, 0, CH) };
+  schedulePreview();
+}
+
+/* ================================================================ 日志 */
+let logTimer = null;
+
+// 界面显示侧脱敏：任何盘符绝对路径压成 …\文件名。
+// 只影响界面显示——wallpaper.log 里仍是完整原文（排障要靠它）。
+// 动机有二：① 私人目录不该展示在一块屏幕大的面板上；② 长路径是日志
+// 格子里最占宽度、最影响阅读的东西。正则要求"盘符+反斜杠"，时间戳
+// [00:22:05] 和 http://127.0.0.1:55162 这类都不会被误伤。
+function maskPaths(s) {
+  return s.replace(/[A-Za-z]:[\\/][^\s"'<>|*?:]*/g, m => {
+    const seg = m.split(/[\\/]/).filter(Boolean);
+    return seg.length > 1 ? '…\\' + seg[seg.length - 1] : '…\\';
+  });
+}
+
+async function refreshLog() {
+  try {
+    const r = await fetch('/api/log?n=240');
+    const text = await r.text();
+    const lines = text.split('\n').filter(Boolean);
+    $('log').innerHTML = lines.map(l => {
+      l = maskPaths(l);
+      let cls = '';
+      if (/出错|异常|失败|崩溃|卡顿|Error|Traceback/.test(l)) cls = 'l-err';
+      else if (/未|警告|取消|暂停/.test(l)) cls = 'l-warn';
+      else if (/启动完成|已挂|恢复重绘|通过/.test(l)) cls = 'l-ok';
+      const m = l.match(/^(\[[\d:]{8}\])(.*)$/);
+      if (m) return '<span class="l-time">' + escapeHtml(m[1]) + '</span>'
+        + '<span class="' + cls + '">' + escapeHtml(m[2]) + '</span>';
+      return '<span class="' + cls + '">' + escapeHtml(l) + '</span>';
+    }).join('\n');
+    const box = $('log');
+    box.scrollTop = box.scrollHeight;
+  } catch (e) { /* 离线遮罩已经在提示了 */ }
+}
+
+/* ================================================================ 分段控件 */
+function buildSeg(hostId, items, getCur, onPick) {
+  const host = $(hostId);
+  host.innerHTML = '';
+  for (const it of items) {
+    const b = el('button', null, it.t);
+    b.dataset.k = it.k;
+    b.addEventListener('click', () => { onPick(it.k); paintSeg(hostId, items, getCur); });
+    host.appendChild(b);
+  }
+  paintSeg(hostId, items, getCur);
+}
+function paintSeg(hostId, items, getCur) {
+  const cur = getCur();
+  for (const b of $(hostId).children) b.classList.toggle('on', b.dataset.k === cur);
+}
+
+/* ================================================================ 主题 */
+function applyTheme() {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem('panel-theme', theme);
+  paintSeg('seg-theme', THEMES, () => theme);
+}
+
+/* ================================================================ 装配 */
+async function boot() {
+  applyTheme();
+
+  buildSeg('seg-theme', THEMES, () => theme, k => { theme = k; applyTheme(); });
+
+  buildSeg('seg-anchor', ANCHORS, () => anchor, k => {
+    anchor = k;
+    spot = { x: CW / 2, y: CH / 2 };        // 换取景位置时把光斑放回画面中间
+    schedulePreview();
+  });
+  buildSeg('seg-zoom', [{ k: 'auto', t: '适应' }, { k: 'one', t: '1:1' }],
+    () => (zoomLock == null ? 'auto' : 'one'),
+    k => { zoomLock = (k === 'one') ? 1 : null; spot = { x: CW / 2, y: CH / 2 }; schedulePreview(); });
+
+  buildSliders();
+  buildSwitches();
+  buildImages();
+  for (const s of SLIDERS) makeValEditable(s);
+
+  spot = { x: CW / 2, y: CH / 2 };
+
+  $('btn-run').addEventListener('click', async () => {
+    const alive = state && state.wallpaper && state.wallpaper.alive;
+    const r = await post('/api/action', { action: alive ? 'stop' : 'start' });
+    if (r.state) { state = r.state; paintStatus(); }
+    toast(r.note || (alive ? '已停止' : '已启动'), 'ok');
+    refreshLog();
+  });
+  $('btn-restart').addEventListener('click', async () => {
+    toast('正在重启壁纸…');
+    const r = await post('/api/action', { action: 'restart' });
+    if (r.state) { state = r.state; paintStatus(); }
+    refreshLog();
+  });
+  $('btn-reset').addEventListener('click', async () => {
+    const r = await post('/api/action', { action: 'reset' });
+    if (r.state) { state = r.state; cfg = Object.assign({}, r.state.config); }
+    paintAll();
+    toast('效果参数已恢复默认', 'ok');
+  });
+  $('btn-folder').addEventListener('click', () => post('/api/action', { action: 'open-folder' }));
+  $('btn-reload').addEventListener('click', async () => {
+    const r = await post('/api/reload-images');
+    if (r.state) { state = r.state; cfg = Object.assign({}, r.state.config); }
+    paintAll();
+    toast('已请求重新读取两张图', 'ok');
+  });
+  $('btn-logrefresh').addEventListener('click', refreshLog);
+  $('btn-logfile').addEventListener('click', () => post('/api/action', { action: 'open-log' }));
+  $('btn-tray').addEventListener('click', async () => {
+    const r = await post('/api/action', { action: 'to-tray' });
+    // ok === false 是拒绝，不是出错：托盘图标没装上，后端不肯把窗口藏起来
+    // （图标是唯一能把窗口捞回来的入口，装不上就等于藏进去找不回来）。
+    if (r.ok === false) { toast(r.note || '托盘没装上，收起来就找不回来了'); return; }
+    toast('已收进托盘 — 单击托盘图标可以再打开', 'ok');
+  });
+  $('btn-quit').addEventListener('click', async () => {
+    // 规则 A：后端会先弹一个原生三选一（只退面板 / 连壁纸一起停 / 取消），
+    // 用户选完才回话。所以这里的 await 可能等上一会儿 —— 别在外面套超时，
+    // 也不要在发请求的同时就把界面关掉（那样点「取消」会看到一个已经装死的面板）。
+    let r = null;
+    try { r = await post('/api/quit'); } catch (e) { return; }
+    if (!r || r.canceled) { toast('已取消退出'); return; }
+    // 关窗口交给后端（发 SC_CLOSE）：只有它知道窗口句柄；而窗口一关，
+    // 服务就会顺着 main() 的收摊路径一起收干净。
+    toast(r.stopped ? '正在退出，并停止壁纸…' : '正在退出（壁纸继续跑）');
+  });
+  // 规则 B 提示条上的两个按钮。「停止壁纸，显示系统壁纸」先记"看过"再停 ——
+  // 顺序反了的话壁纸停掉的那一刻 state 刷新，提示条还亮着，观感是"没点上"。
+  $('btn-syswp-stop').addEventListener('click', async () => {
+    await post('/api/action', { action: 'syswp-seen' }).catch(() => {});
+    await post('/api/action', { action: 'stop' });
+    toast('壁纸已停止，现在桌面上显示的是系统壁纸');
+  });
+  $('btn-syswp-ok').addEventListener('click', async () => {
+    await post('/api/action', { action: 'syswp-seen' }).catch(() => {});
+  });
+  window.addEventListener('resize', () => { paintValues(); schedulePreview(); });
+  // 根滚动条钉死在 0。面板永远是一屏，滚动只该发生在两列里面 ——
+  // 无论是浏览器把"刚获得焦点的隐藏控件"滚进视野，还是滚轮从列末顺着链子
+  // 爬到根上，结果都是整个界面整体窜位。根滚动对面板没有任何正当用途。
+  window.addEventListener('scroll', () => {
+    if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
+  });
+  // 关窗时前端别拦着
+  window.addEventListener('beforeunload', () => { try { navigator.sendBeacon && 0; } catch (e) {} });
+
+  await tick(true);
+  logTimer = setInterval(() => { if ($('log-auto').checked) refreshLog(); }, 3000);
+  refreshLog();
+}
+
+function paintAll() {
+  paintValues();
+  paintStatus();
+  paintImages();
+  schedulePreview();
+}
+
+let ticking = false;
+async function tick(first) {
+  try {
+    state = await api('/api/state');
+    // 后端是权威：只在用户没有未落盘改动时覆盖界面值
+    if (first || dirty.size === 0) {
+      const fresh = {};
+      for (const k in state.config) {
+        if (!dragging.has(k) && !dirty.has(k)) fresh[k] = state.config[k];
+      }
+      cfg = Object.assign({}, state.config, cfg);
+      for (const k in fresh) cfg[k] = fresh[k];
+    }
+    paintAll();
+  } catch (e) {}
+  setTimeout(() => tick(false), 2000);
+}
+
+boot();
+</script>
+</body>
+</html>

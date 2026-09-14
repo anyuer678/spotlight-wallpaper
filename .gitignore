@@ -1,0 +1,23 @@
+# runtime / private files
+SANITIZED-REPORT.md
+wallpaper-config.json
+wallpaper.log
+wallpaper.log.old
+*.pid
+panel-seen.json
+system-wallpaper.json
+panel.ico
+
+# user images (put your own here)
+images/out.jpg
+images/in.jpg
+images/*.png
+
+# test artifacts
+__pycache__/
+*.pyc
+_ui_*.png
+_probe_*.png
+_probe_*.py.out
+_switch_after.png
+COMMIT_MSG.txt

@@ -1,0 +1,888 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>聚光壁纸 · Spotlight Wallpaper</title>
+<style>
+  /* ============ 基础 ============ */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #05070f;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 光斑中心与半径，全部由 JS 写入 */
+  :root {
+    --solid: 45%;    /* 实心停止点，羽化由它决定 */
+    --glow: 0.30;    /* 光晕强度 */
+  }
+
+  /* ============ 图层 ============ */
+  /* 范围外的图：铺满整屏，全程静止，永不重绘 */
+  .layer {
+    position: fixed; inset: 0; z-index: 1;
+    background-color: #070a14;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+    pointer-events: none;
+  }
+
+  /* 光斑窗口 —— 关键设计：
+     蒙版只作用在"光斑大小"的这个小盒子上（而不是整屏），
+     盒子靠 transform 移动（纯 GPU 合成，不触发重绘）。
+     于是开销跟屏幕分辨率脱钩，只跟光斑本身有关。 */
+  .spot {
+    position: fixed; left: 0; top: 0;
+    width: 360px; height: 360px;   /* 由 JS 按光斑尺寸设置 */
+    overflow: hidden;
+    pointer-events: none;
+    z-index: 2;
+    transform: translate3d(-9999px, -9999px, 0);
+    will-change: transform;
+    -webkit-mask-image: radial-gradient(closest-side, #000 var(--solid), rgba(0,0,0,0) 100%);
+            mask-image: radial-gradient(closest-side, #000 var(--solid), rgba(0,0,0,0) 100%);
+    -webkit-mask-size: 100% 100%;
+            mask-size: 100% 100%;
+    -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+  }
+  /* 方形光斑：用内联 SVG 做蒙版，带高斯模糊羽化 */
+  .spot.is-square {
+    -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cdefs%3E%3Cfilter id='f' x='-30%25' y='-30%25' width='160%25' height='160%25'%3E%3CfeGaussianBlur stdDeviation='5'/%3E%3C/filter%3E%3C/defs%3E%3Crect x='8' y='8' width='84' height='84' rx='12' fill='%23000' filter='url(%23f)'/%3E%3C/svg%3E");
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Cdefs%3E%3Cfilter id='f' x='-30%25' y='-30%25' width='160%25' height='160%25'%3E%3CfeGaussianBlur stdDeviation='5'/%3E%3C/filter%3E%3C/defs%3E%3Crect x='8' y='8' width='84' height='84' rx='12' fill='%23000' filter='url(%23f)'/%3E%3C/svg%3E");
+  }
+
+  /* 窗口里的图：始终按视口大小平铺，再用反向位移抵消窗口的移动，
+     使画面相对屏幕完全静止 —— 动的只是那个"洞"。 */
+  .spot-img {
+    position: absolute; left: 0; top: 0;
+    width: 100vw; height: 100vh;
+    background-color: #070a14;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+    transform: translate3d(0, 0, 0);
+    will-change: transform;
+  }
+
+  /* 跟着光斑走的柔光，同样只靠 transform 移动 */
+  .spot-glow {
+    position: fixed; left: 0; top: 0;
+    width: 440px; height: 440px;   /* 由 JS 设置 */
+    pointer-events: none; z-index: 3;
+    mix-blend-mode: screen;
+    transform: translate3d(-9999px, -9999px, 0);
+    will-change: transform;
+    background: radial-gradient(closest-side, rgba(255, 246, 224, var(--glow)), rgba(255, 246, 224, 0) 65%);
+    transition: opacity .4s ease;
+  }
+  body.no-glow .spot-glow { opacity: 0; }
+
+  /* ============ 开场引导 ============ */
+  .intro {
+    position: fixed; left: 0; right: 0; bottom: 8vh;
+    text-align: center; color: #fff; pointer-events: none;
+    text-shadow: 0 2px 20px rgba(0,0,0,.8);
+    transition: opacity .8s ease, transform .8s ease;
+    z-index: 30;
+  }
+  .intro h1 {
+    margin: 0 0 10px; font-size: 30px; font-weight: 600; letter-spacing: .18em;
+  }
+  .intro p { margin: 6px 0; font-size: 14px; opacity: .82; letter-spacing: .04em; }
+  .intro .sub { font-size: 12.5px; opacity: .6; margin-top: 14px; }
+  .intro.hide { opacity: 0; transform: translateY(14px); }
+  .kbd {
+    display: inline-block; padding: 1px 7px; margin: 0 2px;
+    border: 1px solid rgba(255,255,255,.35); border-radius: 5px;
+    font-size: 11.5px; background: rgba(255,255,255,.08);
+  }
+
+  /* ============ 设置面板 ============ */
+  .panel {
+    position: fixed; top: 20px; right: 20px; width: 294px;
+    padding: 16px 16px 14px; z-index: 40;
+    background: rgba(16,18,26,.72);
+    -webkit-backdrop-filter: blur(20px) saturate(150%);
+    backdrop-filter: blur(20px) saturate(150%);
+    border: 1px solid rgba(255,255,255,.13);
+    border-radius: 16px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    color: #eef1f7; font-size: 12.5px;
+    transition: opacity .28s ease, transform .28s ease;
+    max-height: calc(100vh - 40px); overflow-y: auto;
+  }
+  .panel.hide { opacity: 0; transform: translateX(16px) scale(.98); pointer-events: none; }
+  .panel::-webkit-scrollbar { width: 6px; }
+  .panel::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 3px; }
+
+  .panel h2 {
+    margin: 0 0 14px; font-size: 13px; font-weight: 600; letter-spacing: .1em;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel h2 span.dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #6ee7a8;
+    box-shadow: 0 0 10px #6ee7a8; margin-right: 8px; flex: none;
+  }
+  .panel h2 .title { display: flex; align-items: center; flex: 1; }
+  .panel h2 button {
+    background: none; border: none; color: rgba(255,255,255,.5); cursor: pointer;
+    font-size: 15px; line-height: 1; padding: 2px 4px;
+  }
+  .panel h2 button:hover { color: #fff; }
+
+  .group { margin-bottom: 16px; }
+  .group:last-child { margin-bottom: 4px; }
+  .group-label {
+    font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+    color: rgba(255,255,255,.4); margin-bottom: 8px;
+  }
+
+  .slot {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px; margin-bottom: 8px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08); border-radius: 11px;
+  }
+  .slot .thumb {
+    width: 46px; height: 30px; flex: none; border-radius: 6px;
+    background: rgba(255,255,255,.08) center/cover no-repeat;
+    border: 1px solid rgba(255,255,255,.1);
+  }
+  .slot .meta { flex: 1; min-width: 0; }
+  .slot .meta .name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slot .meta .tip { font-size: 10.5px; color: rgba(255,255,255,.42); margin-top: 2px; }
+  .slot .acts { display: flex; gap: 4px; flex: none; }
+  .slot button.mini {
+    background: rgba(255,255,255,.1); border: none; color: #dfe4ee;
+    border-radius: 7px; padding: 5px 9px; font-size: 11px; cursor: pointer;
+  }
+  .slot button.mini:hover { background: rgba(255,255,255,.2); }
+
+  .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 11px; }
+  .row label { color: rgba(255,255,255,.78); }
+  .row .val { color: rgba(255,255,255,.45); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 3px; border-radius: 2px; margin: 2px 0 12px;
+    background: rgba(255,255,255,.16); outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 13px; height: 13px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.5); cursor: pointer;
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 13px; height: 13px; border: none; border-radius: 50%; background: #fff; cursor: pointer;
+  }
+
+  select {
+    width: 100%; padding: 7px 9px; margin-bottom: 11px;
+    background: rgba(255,255,255,.08); color: #eef1f7;
+    border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
+    font-size: 12px; outline: none; cursor: pointer;
+  }
+  select option { background: #1b1e29; color: #eef1f7; }
+
+  .switches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sw {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border-radius: 9px; cursor: pointer;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.09);
+    font-size: 11.5px; color: rgba(255,255,255,.72); user-select: none;
+    transition: all .16s ease;
+  }
+  .sw:hover { background: rgba(255,255,255,.11); }
+  .sw.on { background: rgba(110,231,168,.16); border-color: rgba(110,231,168,.45); color: #b7f5d3; }
+  .sw i {
+    width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.3); flex: none;
+  }
+  .sw.on i { background: #6ee7a8; box-shadow: 0 0 8px #6ee7a8; }
+
+  .btn-row { display: flex; gap: 8px; }
+  .btn {
+    flex: 1; padding: 9px; border: none; border-radius: 10px; cursor: pointer;
+    background: rgba(255,255,255,.1); color: #eef1f7; font-size: 12px;
+    transition: background .16s ease;
+  }
+  .btn:hover { background: rgba(255,255,255,.19); }
+  .btn.primary { background: rgba(110,231,168,.2); color: #c8f7de; }
+  .btn.primary:hover { background: rgba(110,231,168,.32); }
+
+  /* ============ 拖放覆盖层 ============ */
+  .drop {
+    position: fixed; inset: 0; z-index: 60; display: none;
+    background: rgba(6,8,14,.72);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  }
+  .drop.show { display: flex; }
+  .drop-zone {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    border: 2px dashed rgba(255,255,255,.22); margin: 24px;
+    border-radius: 20px; color: rgba(255,255,255,.75); font-size: 15px;
+    transition: all .16s ease; text-align: center; line-height: 1.7;
+  }
+  .drop-zone:first-child { margin-right: 8px; }
+  .drop-zone:last-child { margin-left: 8px; }
+  .drop-zone.active {
+    border-color: #6ee7a8; background: rgba(110,231,168,.1); color: #fff;
+  }
+  .drop-zone b { display: block; font-size: 18px; margin-bottom: 6px; }
+
+  /* ============ 帮助浮层 ============ */
+  .help {
+    position: fixed; inset: 0; z-index: 70; display: none;
+    background: rgba(6,8,14,.82);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    color: #e9edf5; overflow-y: auto; padding: 8vh 24px;
+  }
+  .help.show { display: block; }
+  .help-inner { max-width: 620px; margin: 0 auto; font-size: 13.5px; line-height: 1.85; }
+  .help h3 { font-size: 20px; margin: 0 0 18px; letter-spacing: .06em; }
+  .help h4 { font-size: 13px; margin: 22px 0 8px; color: #6ee7a8; letter-spacing: .08em; }
+  .help p, .help li { color: rgba(255,255,255,.76); margin: 4px 0; }
+  .help ul { padding-left: 18px; margin: 6px 0; }
+  .help code {
+    background: rgba(255,255,255,.1); padding: 1.5px 6px; border-radius: 5px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: #ffe08a;
+  }
+  .help .close {
+    position: fixed; top: 24px; right: 28px; background: rgba(255,255,255,.12);
+    border: none; color: #fff; width: 36px; height: 36px; border-radius: 50%;
+    cursor: pointer; font-size: 16px;
+  }
+  .help .close:hover { background: rgba(255,255,255,.24); }
+
+  /* ============ Toast ============ */
+  .toast {
+    position: fixed; left: 50%; bottom: 42px; transform: translate(-50%, 16px);
+    background: rgba(16,18,26,.9); color: #fff; padding: 10px 18px;
+    border-radius: 11px; font-size: 12.5px; z-index: 90;
+    border: 1px solid rgba(255,255,255,.14); box-shadow: 0 10px 34px rgba(0,0,0,.5);
+    opacity: 0; pointer-events: none; transition: all .3s ease;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* 闲置时收起一切，纯净当壁纸 */
+  body.idle { cursor: none; }
+  body.idle .spot-glow { opacity: 1; }
+</style>
+</head>
+<body>
+  <!-- 范围外：默认铺满整屏 -->
+  <div class="layer" id="layerOut"></div>
+  <!-- 范围内：一个跟随鼠标移动的光斑窗口 -->
+  <div class="spot" id="spot"><div class="spot-img" id="spotImg"></div></div>
+  <!-- 跟随光斑的柔光 -->
+  <div class="spot-glow" id="spotGlow"></div>
+
+  <!-- 开场引导 -->
+  <div class="intro" id="intro">
+    <h1>聚 光</h1>
+    <p>移动鼠标 · 光斑之内是另一个世界</p>
+    <p class="sub">把两张图片拖到窗口即可替换 —— <span class="kbd">左半屏</span> = 范围外　<span class="kbd">右半屏</span> = 范围内</p>
+  </div>
+
+  <!-- 设置面板 -->
+  <div class="panel" id="panel">
+    <h2>
+      <span class="title"><span class="dot"></span>聚光壁纸</span>
+      <button id="btnHelp" title="帮助">?</button>
+      <button id="btnCollapse" title="收起 (H)">–</button>
+    </h2>
+
+    <div class="group">
+      <div class="group-label">图片</div>
+      <div class="slot">
+        <div class="thumb" id="thumbOut"></div>
+        <div class="meta">
+          <div class="name" id="nameOut">范围外的图</div>
+          <div class="tip" id="tipOut">未设置 · 使用默认图案</div>
+        </div>
+        <div class="acts">
+          <button class="mini" data-pick="outer">选择</button>
+          <button class="mini" data-clear="outer">清空</button>
+        </div>
+      </div>
+      <div class="slot">
+        <div class="thumb" id="thumbIn"></div>
+        <div class="meta">
+          <div class="name" id="nameIn">光斑内的图</div>
+          <div class="tip" id="tipIn">未设置 · 使用默认图案</div>
+        </div>
+        <div class="acts">
+          <button class="mini" data-pick="inner">选择</button>
+          <button class="mini" data-clear="inner">清空</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="group-label">光斑</div>
+      <div class="row"><label for="rSize">大小</label><span class="val" id="vSize">360</span></div>
+      <input type="range" id="rSize" min="120" max="1400" step="10" value="360" />
+
+      <div class="row"><label for="rFeather">边缘柔和</label><span class="val" id="vFeather">45%</span></div>
+      <input type="range" id="rFeather" min="0" max="100" step="1" value="45" />
+
+      <div class="row"><label for="sShape">形状</label></div>
+      <select id="sShape">
+        <option value="circle">圆形</option>
+        <option value="wide">横向椭圆</option>
+        <option value="tall">竖向椭圆</option>
+        <option value="square">方形</option>
+      </select>
+
+      <div class="row"><label for="rFollow">跟随灵敏度</label><span class="val" id="vFollow">0.18</span></div>
+      <input type="range" id="rFollow" min="3" max="60" step="1" value="18" />
+
+      <div class="row"><label for="rGlow">光晕强度</label><span class="val" id="vGlow">30%</span></div>
+      <input type="range" id="rGlow" min="0" max="100" step="1" value="30" />
+    </div>
+
+    <div class="group">
+      <div class="group-label">行为</div>
+      <div class="switches">
+        <div class="sw on" data-toggle="drift"><i></i>自动漂移</div>
+        <div class="sw" data-toggle="invert"><i></i>内外互换</div>
+        <div class="sw on" data-toggle="hideCursor"><i></i>闲置隐藏鼠标</div>
+        <div class="sw on" data-toggle="glow"><i></i>光晕</div>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="btn-row">
+        <button class="btn primary" id="btnFull">全屏 (F)</button>
+        <button class="btn" id="btnReset">恢复默认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 拖放区 -->
+  <div class="drop" id="drop">
+    <div class="drop-zone" data-zone="outer"><div><b>范围外</b>松手放到这里</div></div>
+    <div class="drop-zone" data-zone="inner"><div><b>范围内</b>松手放到这里</div></div>
+  </div>
+
+  <!-- 帮助 -->
+  <div class="help" id="help">
+    <button class="close" id="btnHelpClose">✕</button>
+    <div class="help-inner">
+      <h3>聚光壁纸 · 使用说明</h3>
+
+      <h4>这是什么</h4>
+      <p>屏幕上默认显示一张图；鼠标移到哪里，哪里就"透出"另一张图。鼠标附近是光斑，光斑内外各是一幅画。</p>
+
+      <h4>换成你自己的两张图</h4>
+      <ul>
+        <li><b>拖拽</b>：把图片文件拖到窗口，<b>左半屏</b>松手 = 范围外的图，<b>右半屏</b>松手 = 范围内的图。也可以一次拖两张，分别放到左右。</li>
+        <li><b>点选</b>：面板里对应的「选择」按钮。</li>
+        <li><b>放文件夹（推荐，可长期生效）</b>：把图片命名成 <code>out.jpg</code>（范围外）和 <code>in.jpg</code>（范围内），放进本页面同级的 <code>images</code> 文件夹。支持 jpg / png / webp。</li>
+        <li>图片会自动压缩到最长边 2560px 并保存在浏览器本地，下次打开还在。</li>
+      </ul>
+
+      <h4>快捷键</h4>
+      <ul>
+        <li><code>H</code> 显示 / 隐藏设置面板</li>
+        <li><code>F</code> 进入 / 退出全屏</li>
+        <li><code>空格</code> 暂停 / 恢复光斑跟随</li>
+        <li><code>↑</code> <code>↓</code> 放大 / 缩小光斑</li>
+        <li><code>[</code> <code>]</code> 光斑边缘更硬 / 更柔</li>
+        <li><code>Esc</code> 关闭当前浮层</li>
+      </ul>
+
+      <h4>怎么真的当桌面壁纸用</h4>
+      <ul>
+        <li><b>Windows（免费）</b>：装 <code>Lively Wallpaper</code>（微软商店有），把本文件 <code>index.html</code> 拖进去作为"网页壁纸"，鼠标穿透即可正常交互。</li>
+        <li><b>Wallpaper Engine</b>：新建 → 网页 → 选择 <code>index.html</code>。</li>
+        <li><b>最省事</b>：双击打开本文件，按 <code>F</code> 全屏，三秒不动鼠标，界面会自动收起、鼠标自动隐藏。</li>
+      </ul>
+
+      <h4>调参建议</h4>
+      <ul>
+        <li>清晰照片想要"探照灯"感：大小 300–450，边缘柔和 45%–70%。</li>
+        <li>卡通 / 插画想有硬朗的边界：边缘柔和 5%–20%，光晕关掉。</li>
+        <li>跟随灵敏度越小越"拖尾"，越像在水里；0.35 以上会跟手很紧。</li>
+        <li>自动漂移开启后，鼠标静止 3 秒光斑会自己缓慢游走。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <input type="file" id="filePicker" accept="image/*" style="display:none" />
+
+<script>
+(function () {
+  'use strict';
+
+  /* ==========================================================
+     状态
+     ========================================================== */
+  const DEFAULT_STATE = {
+    size: 360,        // 光斑基准尺寸（圆形时即直径）
+    feather: 45,      // 边缘柔和 0-100
+    shape: 'circle',  // circle | wide | tall | square
+    follow: 0.18,     // 跟随灵敏度
+    glow: 0.30,       // 光晕强度
+    drift: true,      // 自动漂移
+    invert: false,    // 内外互换
+    hideCursor: true, // 闲置隐藏鼠标
+    glowOn: true      // 光晕开关
+  };
+
+  const LS_STATE = 'spotlight-wallpaper:state:v1';
+  const LS_IMG = 'spotlight-wallpaper:img:v1:';
+  const IDLE_MS = 3000;      // 多久算闲置
+  const DRIFT_AFTER = 3000;  // 静止多久开始漂移
+
+  const state = Object.assign({}, DEFAULT_STATE);
+  const images = { outer: null, inner: null };   // { url, name }
+
+  /* 默认占位图案：外层是深夜山影，内层是暖色日出 */
+  const PLACEHOLDER = {
+    outer: `
+      radial-gradient(1200px 620px at 18% 12%, rgba(104,152,255,.30), transparent 62%),
+      radial-gradient(1000px 560px at 82% 78%, rgba(168,110,255,.24), transparent 62%),
+      radial-gradient(760px 380px at 50% 108%, rgba(60,90,180,.34), transparent 70%),
+      linear-gradient(165deg, #060a18 0%, #0c1330 48%, #04060d 100%)`,
+    inner: `
+      radial-gradient(700px 520px at 50% 62%, rgba(255,205,130,.95), transparent 66%),
+      radial-gradient(900px 500px at 12% 18%, rgba(120,190,255,.55), transparent 68%),
+      linear-gradient(150deg, #ff9d5c 0%, #ff5f7e 38%, #8b3fd6 78%, #2a1a5e 100%)`
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const layerOut = $('layerOut'), spot = $('spot'), spotImg = $('spotImg'), spotGlow = $('spotGlow');
+  const panel = $('panel'), intro = $('intro'), dropEl = $('drop'), helpEl = $('help');
+  const toastEl = $('toast'), picker = $('filePicker');
+
+  let pickTarget = 'outer';
+  let toastTimer = null;
+
+  /* ==========================================================
+     小工具
+     ========================================================== */
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  }
+
+  function saveState() {
+    try { localStorage.setItem(LS_STATE, JSON.stringify(state)); } catch (e) {}
+  }
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(LS_STATE);
+      if (raw) Object.assign(state, JSON.parse(raw));
+    } catch (e) {}
+  }
+
+  /* ==========================================================
+     图片：压缩 + 存储 + 渲染
+     ========================================================== */
+  async function readAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+
+  /** 把图片压到最长边 2560，转成 jpeg，控制存储体积 */
+  async function compress(file, maxSide = 2560) {
+    const dataUrl = await readAsDataURL(file);
+    try {
+      const img = await loadImage(dataUrl);
+      const scale = Math.min(1, maxSide / img.naturalWidth, 1600 / img.naturalHeight);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      if (scale >= 1 && file.size < 900 * 1024) return dataUrl; // 已经够小
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, w, h);
+      return cv.toDataURL('image/jpeg', 0.86);
+    } catch (e) {
+      return dataUrl;
+    }
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = reject;
+      im.src = src;
+    });
+  }
+
+  /** 设置某一层的图；slot: 'outer' | 'inner' */
+  async function setImage(slot, file) {
+    if (!file || !file.type.startsWith('image/')) { toast('这个文件不是图片'); return; }
+    toast('正在处理图片…');
+    const url = await compress(file);
+    images[slot] = { url: url, name: file.name };
+    let saved = true;
+    try {
+      localStorage.setItem(LS_IMG + slot, JSON.stringify(images[slot]));
+    } catch (e) {
+      saved = false;   // 图太大，超出浏览器存储配额
+    }
+    paint();
+    renderSlots();
+    intro.classList.add('hide');
+    const label = slot === 'outer' ? '范围外的图' : '范围内的图';
+    toast(saved ? label + '已更新' : label + '已更新（图较大，下次打开需重新设置）');
+  }
+
+  function clearImage(slot) {
+    images[slot] = null;
+    try { localStorage.removeItem(LS_IMG + slot); } catch (e) {}
+    paint();
+    renderSlots();
+    toast('已清除');
+  }
+
+  /** 启动时恢复：本地存储 → images/ 目录约定文件 → 默认图案 */
+  function restoreImages() {
+    ['outer', 'inner'].forEach((slot) => {
+      try {
+        const raw = localStorage.getItem(LS_IMG + slot);
+        if (raw) images[slot] = JSON.parse(raw);
+      } catch (e) {}
+    });
+    // 目录约定：images/out.jpg、images/in.jpg（或 png / webp）
+    const tryDir = (slot, names) => {
+      if (images[slot]) return;
+      const probe = (i) => {
+        if (i >= names.length) return;
+        const path = 'images/' + names[i];
+        const im = new Image();
+        im.onload = () => {
+          images[slot] = { url: path, name: path };
+          paint(); renderSlots();
+        };
+        im.onerror = () => probe(i + 1);
+        im.src = path;
+      };
+      probe(0);
+    };
+    tryDir('outer', ['out.jpg', 'out.png', 'out.webp', 'outer.jpg', 'outer.png']);
+    tryDir('inner', ['in.jpg', 'in.png', 'in.webp', 'inner.jpg', 'inner.png']);
+  }
+
+  /* ==========================================================
+     渲染
+     ========================================================== */
+  function paint() {
+    const a = images.outer ? `url("${images.outer.url}")` : PLACEHOLDER.outer;
+    const b = images.inner ? `url("${images.inner.url}")` : PLACEHOLDER.inner;
+    layerOut.style.backgroundImage = state.invert ? b : a;
+    spotImg.style.backgroundImage = state.invert ? a : b;
+  }
+
+  function renderSlots() {
+    const map = [['outer', 'Out'], ['inner', 'In']];
+    map.forEach(([slot, suffix]) => {
+      const data = images[slot];
+      const thumb = $('thumb' + suffix);
+      const name = $('name' + suffix);
+      const tip = $('tip' + suffix);
+      const label = slot === 'outer' ? '范围外的图' : '光斑内的图';
+      if (data) {
+        thumb.style.backgroundImage = `url("${data.url}")`;
+        name.textContent = data.name;
+        tip.textContent = '已设置 · 点击「选择」可替换';
+      } else {
+        thumb.style.backgroundImage = '';
+        name.textContent = label;
+        tip.textContent = '未设置 · 使用默认图案';
+      }
+    });
+  }
+
+  /** 把状态同步到 DOM：光斑窗口的尺寸、羽化、形状 */
+  function applyGeometry() {
+    const ratio = state.shape === 'wide' ? 1.9 : state.shape === 'tall' ? 1 / 1.9 : 1;
+    const w = state.size * Math.sqrt(ratio);   // 保持面积不变，只改宽高比
+    const h = state.size / Math.sqrt(ratio);
+    radiusX = w / 2;
+    radiusY = h / 2;
+
+    spot.style.width = w + 'px';
+    spot.style.height = h + 'px';
+    spotGlow.style.width = (radiusX * 2.4) + 'px';
+    spotGlow.style.height = (radiusY * 2.4) + 'px';
+
+    const root = document.documentElement.style;
+    root.setProperty('--solid', (100 - state.feather) + '%');   // 羽化：实心停止点越大，边缘越硬
+    root.setProperty('--glow', state.glow);
+
+    spot.classList.toggle('is-square', state.shape === 'square');
+    document.body.classList.toggle('no-glow', !state.glowOn);
+    setPos(curX, curY);   // 尺寸变了，立刻按新半径重新摆放
+  }
+
+  /* ==========================================================
+     光斑运动
+     ========================================================== */
+  let targetX = window.innerWidth / 2;
+  let targetY = window.innerHeight / 2;
+  let curX = targetX, curY = targetY;
+  let radiusX = 180, radiusY = 180;   // 真实值由 applyGeometry 写入
+  let rafId = 0;
+  let paused = false;
+  let lastMoveAt = performance.now();
+  let idleTimer = 0;
+
+  /* 每帧只写 transform：窗口平移 + 窗口内的图反向平移。
+     两者相抵，画面看起来纹丝不动，动的只是那个"洞" —— 纯 GPU 合成，不重绘。 */
+  function setPos(x, y) {
+    const lx = x - radiusX, ly = y - radiusY;
+    spot.style.transform = 'translate3d(' + lx.toFixed(1) + 'px,' + ly.toFixed(1) + 'px,0)';
+    spotImg.style.transform = 'translate3d(' + (-lx).toFixed(1) + 'px,' + (-ly).toFixed(1) + 'px,0)';
+    const gw = radiusX * 1.2, gh = radiusY * 1.2;
+    spotGlow.style.transform = 'translate3d(' + (x - gw).toFixed(1) + 'px,' + (y - gh).toFixed(1) + 'px,0)';
+  }
+  setPos(curX, curY);
+
+  function loop(t) {
+    // 静止 3 秒后开始缓慢漂移（李萨如曲线），鼠标一动立刻接管
+    const drifting = state.drift && (t - lastMoveAt > DRIFT_AFTER);
+    if (drifting) {
+      const s = t / 1000;
+      const w = window.innerWidth, h = window.innerHeight;
+      targetX = w * (0.5 + 0.34 * Math.sin(s * 0.21) * Math.cos(s * 0.13));
+      targetY = h * (0.5 + 0.30 * Math.sin(s * 0.17 + 1.1));
+    }
+
+    const ease = paused ? 0 : state.follow;
+    curX += (targetX - curX) * ease;
+    curY += (targetY - curY) * ease;
+
+    const still = Math.abs(targetX - curX) < 0.3 && Math.abs(targetY - curY) < 0.3 && !drifting;
+    if (!still) setPos(curX, curY);
+
+    // 完全静止且不漂移时停掉循环，省电（壁纸要挂一整天）
+    if (still && !drifting) {
+      rafId = 0;
+      return;
+    }
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function kick() {
+    if (!rafId) rafId = requestAnimationFrame(loop);
+  }
+
+  function onPointerMove(x, y) {
+    targetX = x; targetY = y;
+    lastMoveAt = performance.now();
+    document.body.classList.remove('idle');
+    intro.classList.add('hide');
+
+    // 闲置定时器：隐藏鼠标光标
+    clearTimeout(idleTimer);
+    if (state.hideCursor) {
+      idleTimer = setTimeout(() => {
+        if (!panel.matches(':hover')) document.body.classList.add('idle');
+      }, IDLE_MS);
+    }
+    kick();
+  }
+
+  window.addEventListener('mousemove', (e) => onPointerMove(e.clientX, e.clientY), { passive: true });
+  window.addEventListener('touchmove', (e) => {
+    if (e.touches[0]) onPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  window.addEventListener('resize', () => {
+    targetX = Math.min(targetX, window.innerWidth);
+    targetY = Math.min(targetY, window.innerHeight);
+    kick();
+  });
+
+  /* ==========================================================
+     面板交互
+     ========================================================== */
+  /** 把滑块和某个状态字段绑定：value 是滑块原始值(0-100)，transform 转成实际值 */
+  function bindRange(id, valueId, key, transform, format) {
+    const el = $(id), val = $(valueId);
+    el.addEventListener('input', () => {
+      state[key] = transform ? transform(+el.value) : +el.value;
+      val.textContent = format(+el.value);
+      applyGeometry(); saveState();
+    });
+  }
+
+  bindRange('rSize',    'vSize',    'size',    null,         (v) => v + 'px');
+  bindRange('rFeather', 'vFeather', 'feather', null,         (v) => v + '%');
+  bindRange('rFollow',  'vFollow',  'follow',  (v) => v / 100, (v) => (v / 100).toFixed(2));
+  bindRange('rGlow',    'vGlow',    'glow',    (v) => v / 100, (v) => v + '%');
+
+  // 形状
+  $('sShape').addEventListener('change', (e) => {
+    state.shape = e.target.value;
+    applyGeometry(); saveState();
+  });
+
+  // 开关
+  document.querySelectorAll('.sw').forEach((sw) => {
+    sw.addEventListener('click', () => {
+      const key = sw.dataset.toggle;
+      if (key === 'glow') state.glowOn = !state.glowOn;
+      else state[key] = !state[key];
+      renderSwitches();
+      applyGeometry(); paint(); saveState();
+      kick();
+    });
+  });
+
+  function renderSwitches() {
+    document.querySelectorAll('.sw').forEach((sw) => {
+      const key = sw.dataset.toggle;
+      const on = key === 'glow' ? state.glowOn : !!state[key];
+      sw.classList.toggle('on', on);
+    });
+  }
+
+  // 选择图片
+  document.querySelectorAll('[data-pick]').forEach((b) => {
+    b.addEventListener('click', () => { pickTarget = b.dataset.pick; picker.click(); });
+  });
+  picker.addEventListener('change', () => {
+    if (picker.files && picker.files[0]) setImage(pickTarget, picker.files[0]);
+    picker.value = '';
+  });
+  document.querySelectorAll('[data-clear]').forEach((b) => {
+    b.addEventListener('click', () => clearImage(b.dataset.clear));
+  });
+
+  // 面板折叠 / 帮助 / 全屏 / 重置
+  function togglePanel() { panel.classList.toggle('hide'); }
+  $('btnCollapse').addEventListener('click', togglePanel);
+  $('btnHelp').addEventListener('click', () => helpEl.classList.add('show'));
+  $('btnHelpClose').addEventListener('click', () => helpEl.classList.remove('show'));
+  helpEl.addEventListener('click', (e) => { if (e.target === helpEl) helpEl.classList.remove('show'); });
+
+  $('btnFull').addEventListener('click', toggleFullscreen);
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+  }
+
+  $('btnReset').addEventListener('click', () => {
+    Object.assign(state, DEFAULT_STATE);
+    applyGeometry(); paint(); renderSwitches(); syncInputs(); saveState();
+    toast('已恢复默认');
+  });
+
+  function syncInputs() {
+    $('rSize').value = state.size;          $('vSize').textContent = state.size + 'px';
+    $('rFeather').value = state.feather;    $('vFeather').textContent = state.feather + '%';
+    $('rFollow').value = Math.round(state.follow * 100);
+    $('vFollow').textContent = state.follow.toFixed(2);
+    $('rGlow').value = Math.round(state.glow * 100);
+    $('vGlow').textContent = Math.round(state.glow * 100) + '%';
+    $('sShape').value = state.shape;
+    renderSwitches();
+  }
+
+  /* ==========================================================
+     拖放
+     ========================================================== */
+  let dragDepth = 0;
+  window.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    dragDepth++;
+    dropEl.classList.add('show');
+  });
+  window.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const half = e.clientX < window.innerWidth / 2 ? 'outer' : 'inner';
+    document.querySelectorAll('.drop-zone').forEach((z) => {
+      z.classList.toggle('active', z.dataset.zone === half);
+    });
+  });
+  window.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) dropEl.classList.remove('show');
+  });
+  window.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dragDepth = 0;
+    dropEl.classList.remove('show');
+    const zone = e.clientX < window.innerWidth / 2 ? 'outer' : 'inner';
+    const other = zone === 'outer' ? 'inner' : 'outer';
+    const files = Array.from(e.dataTransfer.files || []).filter((f) => f.type.startsWith('image/'));
+    if (!files.length) { toast('请拖入图片文件'); return; }
+    await setImage(zone, files[0]);
+    if (files[1]) await setImage(other, files[1]);
+  });
+
+  // 粘贴图片：先填范围外，再填范围内
+  window.addEventListener('paste', async (e) => {
+    const item = Array.from(e.clipboardData.items || []).find((i) => i.type.startsWith('image/'));
+    if (!item) return;
+    const file = item.getAsFile();
+    await setImage(images.outer ? 'inner' : 'outer', file);
+  });
+
+  /* ==========================================================
+     快捷键
+     ========================================================== */
+  window.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+      if (e.key === 'Escape') e.target.blur();
+      return;
+    }
+    switch (e.key) {
+      case 'h': case 'H': togglePanel(); break;
+      case 'f': case 'F': toggleFullscreen(); break;
+      case ' ':
+        e.preventDefault();
+        paused = !paused;
+        if (paused) { curX = targetX; curY = targetY; setPos(curX, curY); }
+        else kick();
+        toast(paused ? '已暂停跟随' : '已恢复跟随');
+        break;
+      case 'ArrowUp':    state.size = Math.min(1400, state.size + 20); applyGeometry(); syncInputs(); saveState(); break;
+      case 'ArrowDown':  state.size = Math.max(120, state.size - 20); applyGeometry(); syncInputs(); saveState(); break;
+      case '[':          state.feather = Math.max(0, state.feather - 5); applyGeometry(); syncInputs(); saveState(); break;
+      case ']':          state.feather = Math.min(100, state.feather + 5); applyGeometry(); syncInputs(); saveState(); break;
+      case 'Escape':
+        helpEl.classList.remove('show');
+        intro.classList.add('hide');
+        break;
+    }
+  });
+
+  /* ==========================================================
+     启动
+     ========================================================== */
+  loadState();
+  applyGeometry();
+  paint();
+  renderSlots();
+  syncInputs();
+  restoreImages();
+  kick();
+
+  // 开场引导几秒后自动淡出
+  setTimeout(() => intro.classList.add('hide'), 6000);
+})();
+</script>
+</body>
+</html>
