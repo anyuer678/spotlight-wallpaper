@@ -9,6 +9,7 @@
     SpotlightWallpaper.exe --no-panel          只起壁纸（开机自启走这条）
     SpotlightWallpaper.exe --window            小窗口预览（安全模式）
     SpotlightWallpaper.exe --full              全屏预览
+    SpotlightWallpaper.exe --toggle-preview    叫出 / 关掉小窗口预览（想自己绑快捷键时用）
     SpotlightWallpaper.exe --wallpaper         壁纸进程本体（内部用）
     SpotlightWallpaper.exe --panel             面板进程本体（内部用）
     SpotlightWallpaper.exe --serve-only        面板服务模式（无窗口，测试用）
@@ -36,7 +37,8 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, 'w', encoding='utf-8')
 
 # 壁纸自己的模式参数：出现它们就说明用户想要的是壁纸，不是启动器。
-WALLPAPER_FLAGS = ('--window', '--full', '--selftest', '--bench', '--restarted')
+WALLPAPER_FLAGS = ('--window', '--full', '--selftest', '--bench', '--restarted',
+                   '--toggle-preview')
 PANEL_FLAGS = ('--serve-only', '--port')
 
 USAGE = __doc__

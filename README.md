@@ -129,14 +129,19 @@
 | **停止壁纸** | `stop-wallpaper.bat` |
 
 > 也可以直接双击 `wallpaper.pyw`，效果同「当壁纸用」。
+>
+> 安全预览不用翻这个 bat：壁纸跑着的时候按 `Ctrl` + `Alt` + `W` 就能把那个
+> 小窗口叫出来，**再按一下就关掉**。两张图、参数、跟随手感都跟壁纸一模一样，
+> 只是装在一个有标题栏的普通窗口里。
 
 ### 退出
 
-**任何模式下都能退出**，三条路随便挑一条：
+**任何模式下都能退出**，几条路随便挑一条：
 
 | 方式 | 说明 |
 | --- | --- |
 | `Ctrl` + `Alt` + `Q` | **全局热键**，不占用焦点，任何时候都能按 —— 记不住别的就记这个 |
+| `Ctrl` + `Alt` + `W` | 关掉小窗口预览（再按一下又叫出来，来回切） |
 | 窗口的 `×` 按钮 | 安全预览模式下直接点标题栏右上角 |
 | `Esc` | 安全预览 / 全屏预览下有效 |
 | `stop-wallpaper.bat` | 万一程序卡住，双击它 |
@@ -149,6 +154,9 @@
 | `--window` | 1200×720 普通窗口，有标题栏 | 不会。就是个普通小窗口 |
 | `--full` | 全屏，但**不置顶** | 不会。你点别的窗口，它自动让开 |
 | `--selftest` | 只做结构自检并打印结果，不留窗口 | 不会 |
+
+另有 `--toggle-preview`：不是一种模式，而是"做一件事就退"的入口 —— 叫出 / 关掉
+小窗口预览（等价于 `Ctrl`+`Alt`+`W`）。壁纸正跑着时用它最有意义。
 
 桌面层挂载失败时（不同 Windows 版本差异较大），程序会**自动降级成安全小窗口**并在日志里写清原因 —— 绝不会留下一个盖住全屏的窗口。
 
@@ -505,6 +513,11 @@ python build_exe.py
 
 产物 `dist/SpotlightWallpaper.exe`，约 20 MB，拷给谁都能双击直接用。
 
+> **别拿日常用的那个 Python 打包。** 它多半装着 numpy / scipy / opencv，这个项目
+> 一个都不 import，但 PyInstaller 会被某些 hook 带着把它们整包塞进 exe ——
+> 实测同一份代码：干净虚拟环境 20 MB，日常环境 34 MB。`build_exe.py` 开头会
+> 检查并提醒，真要在意体积就用一个只装上面三个包的虚拟环境来打包。
+
 `build_exe.py` 会先把三个 `.pyw` 复制成 `.py` 再交给 PyInstaller。原因：源码方式
 跑时 `.pyw` 这个后缀是有意义的（双击不弹黑窗），打包时没有；而 PyInstaller 只把
 `.py` 当模块找，不认 `.pyw`。复制一份镜像给它分析，主项目一个字节都不用动。
@@ -520,6 +533,7 @@ exe 里不再有 `.pyw` 文件可以"再拉一个进程"，所以所有拉起同
 | `SpotlightWallpaper.exe --no-panel` | 只起壁纸（开机自启走这条） |
 | `SpotlightWallpaper.exe --window` | 小窗口预览（安全模式） |
 | `SpotlightWallpaper.exe --full` | 全屏预览 |
+| `SpotlightWallpaper.exe --toggle-preview` | 叫出 / 关掉小窗口预览 —— 等价于按 `Ctrl`+`Alt`+`W`。想自己绑快捷键（桌面快捷方式、AutoHotkey）就指向它 |
 | `SpotlightWallpaper.exe --autostart install\|remove\|status` | 开关开机自启 |
 | `SpotlightWallpaper.exe --version` | 看版本 |
 

@@ -373,8 +373,8 @@ def probe_wallpaper():
     """壁纸进程的真实状态。
 
     光看"pid 还活着"是不够的 —— 它可能活着但压根没挂上去（降级成了小窗口），
-    或者被别的程序从桌面层里挤掉了。**硬证据只有一个：Progman 底下有没有
-    我们这个分层子窗口。** 所以这里直接去枚举 Progman 的子窗口按样式认人，
+    或者被别的程序从桌面层里挤掉了。硬证据只有一个：Progman 底下有没有
+    我们这个分层子窗口。 所以这里直接去枚举 Progman 的子窗口按样式认人，
     而不是猜。
     """
     win32gui, win32con = CORE.win32gui, CORE.win32con
@@ -1147,8 +1147,8 @@ class Handler(BaseHTTPRequestHandler):
     def _tray_action(self, to_tray):
         """界面上的「收进托盘」/「从托盘回来」。
 
-        为什么不跟上面那些 action 一起走"睡 0.35 秒再报状态"——因为**藏窗口
-        这件事本身不需要等**：SW_HIDE 是同步生效的，状态立刻就是准的。
+        为什么不跟上面那些 action 一起走"睡 0.35 秒再报状态"——因为藏窗口
+        这件事本身不需要等：SW_HIDE 是同步生效的，状态立刻就是准的。
         反过来，多睡这 350ms 会让界面在窗口消失前卡一下，观感很差。
 
         `ok=False` 不是错误，是拒绝：托盘图标没装上时绝不许藏窗口（那是
@@ -1323,8 +1323,8 @@ FAVICON = (
 
 # ================================================================ 宿主窗口
 #
-# 面板自己记一个 pid 文件。**单实例判据就用它，不要用"屏幕上有没有这个标题
-# 的窗口"** —— 后者被 Windows 11 的 tab 机制骗过（见下面 find_panel_window）。
+# 面板自己记一个 pid 文件。单实例判据就用它，不要用"屏幕上有没有这个标题
+# 的窗口" —— 后者被 Windows 11 的 tab 机制骗过（见下面 find_panel_window）。
 PANEL_PID_PATH = os.path.join(BASE, 'panel.pid')
 
 # 我们拉起来的那只浏览器进程的 pid（launch_window 填）。
@@ -1388,12 +1388,12 @@ def find_panel_window(pid=None):
     """找我们自己的那个面板窗口。找不到返回 0。
 
      不能用 `FindWindow(None, WINDOW_TITLE)`。 Windows 11 会给每个浏览器
-      标签页建一个 `Windows.Internal.Shell.TabProxyWindow`，**归 explorer.exe
-      所有**，标题就是那个标签页的标题。于是 FindWindow 有相当大概率拿到这个
+      标签页建一个 `Windows.Internal.Shell.TabProxyWindow`，归 explorer.exe
+      所有，标题就是那个标签页的标题。于是 FindWindow 有相当大概率拿到这个
       幽灵窗口，后果是致命的：
         · 它既抬不到前面（SetForegroundWindow 无效）；
-        · 又让 focus_existing_panel() 误判"面板已经开着" → 新面板**一声不响地
-          不启动**：退出码 0、日志只有一行"面板已经在运行"、屏幕上什么都没出现。
+        · 又让 focus_existing_panel() 误判"面板已经开着" → 新面板一声不响地
+          不启动：退出码 0、日志只有一行"面板已经在运行"、屏幕上什么都没出现。
       这正是"点了没反应"最典型的死法。所以这里改成自己挨个枚举，并排除：
         ① 排除 shell 自己建的窗口类（TabProxyWindow / 桌面 / 任务栏）；
         ② 排除 explorer.exe 名下的窗口；
@@ -1821,8 +1821,8 @@ def ask_exit_native(owner=0, auto_click=None):
 def ask_exit_fallback(owner=0):
     """降级方案：原生 MessageBoxW。
 
-     它给不了自定义文案，按钮只能写「是 / 否 / 取消」，所以**正文里必须把
-      对应关系写死**；默认按钮放「否」= 只退面板，让顺手按回车的人不会把壁纸停掉。
+     它给不了自定义文案，按钮只能写「是 / 否 / 取消」，所以正文里必须把
+      对应关系写死；默认按钮放「否」= 只退面板，让顺手按回车的人不会把壁纸停掉。
       代价是这条路上没有「不再询问」（原生 MessageBox 挂不了复选框）——
       只在 tkinter 都 import 不了这种极端情况下才会走到这里。
     """
@@ -1929,8 +1929,8 @@ def finish_exit(source='未知'):
                 log('退出（%s）：第 %d 次请求关窗口才成功' % (source, i + 1))
             return True
         time.sleep(0.5)
-    # 3 次都关不掉 = 那个窗口的窗口过程出了状况。面板是**我们自己拉起来的
-    # 临时 --app 进程**（独立 profile），杀掉它碰不到用户的主浏览器；不兜这一下，
+    # 3 次都关不掉 = 那个窗口的窗口过程出了状况。面板是我们自己拉起来的
+    # 临时 --app 进程（独立 profile），杀掉它碰不到用户的主浏览器；不兜这一下，
     # 用户就只剩一个永远连不上服务的空壳窗口。
     if LAUNCHED_PID and pid_alive(LAUNCHED_PID):
         log('退出（%s）：改用 taskkill 收掉残留的面板窗口进程 %d'

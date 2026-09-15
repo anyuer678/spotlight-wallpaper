@@ -13,13 +13,20 @@
   pythonw wallpaper.pyw --window     小窗口预览 —— 安全模式
                                      开一个 1200x720 的普通窗口，有标题栏，
                                      点右上角 × 就能关掉。绝不会遮挡全屏。
+                                     壁纸跑着的时候按 Ctrl + Alt + W 就能
+                                     叫出它 / 关掉它，不用去双击 bat。
 
   pythonw wallpaper.pyw --full       全屏预览 —— 仅为临时看效果
                                      全屏但不置顶，你点别的窗口它就让开；
                                      按 Esc 或 Ctrl+Alt+Q 退出。
 
+另外还有一个只做一件事、跑完就退的入口（等价于按 Ctrl + Alt + W）：
+
+  pythonw wallpaper.pyw --toggle-preview
+
 退出方式（任何模式都有效）：
   · 全局热键  Ctrl + Alt + Q      ← 不占用焦点，随时能按
+  · 全局热键  Ctrl + Alt + W      ← 叫出 / 关掉小窗口预览（不占全屏）
   · 窗口模式  点标题栏的 ×        或按 Esc
   · 命令行    双击 停止壁纸.bat
 
@@ -274,11 +281,30 @@ RDW_ALLCHILDREN = 0x0080     # 连子窗口一起失效（退出时清残影要�
 # 单实例互斥体，避免重复启动叠出好几层窗口
 _MUTEX = None
 
+# 两种互斥体名，对应两种身份。分开是必需的，不是洁癖：
+#   · MUTEX_WALLPAPER —— 壁纸本体，占着整块桌面，全系统只许有一个；
+#   · MUTEX_PREVIEW   —— 小窗口预览，是个普通窗口，允许和壁纸并存
+#                        （Ctrl+Alt+W 就是这么把它叫出来的），但它自己也
+#                        只许有一个，免得连按两下叠出两个预览窗口。
+# 只用一个名字的话，"壁纸正在跑"会把 --window 一并挡在门外，于是"按个键看
+# 看效果"这条路根本走不通 —— 而看效果正是预览存在的全部理由。
+MUTEX_WALLPAPER = 'SpotlightWallpaper_SingleInstance'
+MUTEX_PREVIEW = 'SpotlightWallpaper_PreviewInstance'
+
+# 预览窗口标题。find_preview_window() 靠它认窗口，整句一起定义、
+# 别在别处再抄一遍 —— 改标题就等于改协议。
+PREVIEW_TITLE = '聚光壁纸 · 小窗口预览'
+WINDOW_TITLE = PREVIEW_TITLE + '（Ctrl+Alt+W 关闭，或点右上角 ×）'
+
+# 预览进程往日志里打的标记。两路进程写同一个 wallpaper.log，
+# 不标出来就分不清某一行是壁纸说的还是预览说的。
+LOG_TAG = ''
+
 
 def log(msg):
     try:
         with open(LOG_PATH, 'a', encoding='utf-8') as f:
-            f.write('[%s] %s\n' % (time.strftime('%H:%M:%S'), msg))
+            f.write('[%s] %s%s\n' % (time.strftime('%H:%M:%S'), LOG_TAG, msg))
     except Exception:
         pass
 
@@ -305,15 +331,139 @@ def save_default_config():
         pass
 
 
-def already_running():
-    """已经有实例在跑就不要重复开窗口"""
+def already_running(name):
+    """已经有同类实例在跑就不要重复开窗口。
+
+    name 传 MUTEX_WALLPAPER 还是 MUTEX_PREVIEW，决定"同类"是谁 ——
+    壁纸和预览互不挡道，见那两个常量的注释。
+    """
     global _MUTEX
     try:
-        _MUTEX = ctypes.windll.kernel32.CreateMutexW(
-            None, False, 'SpotlightWallpaper_SingleInstance')
+        _MUTEX = ctypes.windll.kernel32.CreateMutexW(None, False, name)
         return ctypes.windll.kernel32.GetLastError() == 183   # ERROR_ALREADY_EXISTS
     except Exception:
         return False
+
+
+def preview_running():
+    """小窗口预览在不在跑。
+
+    只探测，绝不创建：CreateMutexW 会顺手把句柄攥在自己手里，本进程从此
+    就成了这个互斥体的持有者 —— 紧接着去拉预览进程，那边一看"已经有了"
+    直接退出，按热键就变成"什么都没发生"。launch.pyw 的 OpenMutexW 注释里
+    记着同一个坑（00:23:34 那次误判）。
+    """
+    try:
+        k = ctypes.windll.kernel32
+        k.OpenMutexW.restype = ctypes.c_void_p
+        h = k.OpenMutexW(0x00100000, False, MUTEX_PREVIEW)    # SYNCHRONIZE
+        if not h:
+            return False
+        k.CloseHandle(ctypes.c_void_p(h))
+        return True
+    except Exception:
+        return False
+
+
+def find_preview_window():
+    """按标题找预览窗口，找不到返回 0。
+
+    敢用标题找，是因为预览窗口是我们自己的 Tk 窗口，标题是一整句中文；
+    面板那边不能这么干 —— Edge 的 TabProxyWindow 会顶着假标题截胡，
+    见 panel.pyw 的 find_panel_window。
+    """
+    hits = []
+
+    def cb(h, _):
+        try:
+            if win32gui.GetWindowText(h).startswith(PREVIEW_TITLE):
+                hits.append(h)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(cb, None)
+    except Exception as e:
+        log('枚举预览窗口失败: %r' % e)
+    return hits[0] if hits else 0
+
+
+def close_preview_window():
+    """请预览窗口自己关掉 —— 等价于点它右上角的 ×。返回窗口句柄，没有则 0。
+
+    发 WM_SYSCOMMAND / SC_CLOSE 而不是 WM_CLOSE：这就是系统在用户点 × 时
+    发的那一条，Tk 会照常走 WM_DELETE_WINDOW 注册的处理函数。面板那边更要紧
+    （Chromium 完全不理会外来的 WM_CLOSE，见 panel.pyw）—— 两边用同一种方式
+    说话，省得记两套规矩。
+    """
+    h = find_preview_window()
+    if not h:
+        return 0
+    try:
+        win32gui.PostMessage(h, win32con.WM_SYSCOMMAND, win32con.SC_CLOSE, 0)
+    except Exception as e:
+        log('请预览窗口关闭失败: %r' % e)
+        return 0
+    return int(h)
+
+
+def _clean_env():
+    """剥掉 PyInstaller 塞给子进程的解包目录环境变量。
+
+    打包成 exe 时，父进程会用 _PYI_* / _MEIPASS2 让子进程复用它那份解好的
+    临时目录（PyInstaller 的省事优化）—— 可父进程一退，那份目录就没了，
+    留在后面的同伴再去读界面、读图片就扑空。各解各的包，互不牵连。
+    panel.pyw 的 _spawn 里写的是同一件事，那边在面板进程里、够不着这段。
+    """
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith('_PYI_') and k != '_MEIPASS2'}
+
+
+def _preview_argv():
+    """拼出"拉起一个预览进程"的命令行。
+
+    角色参数用 --wallpaper、模式参数另加 --window —— 不能图省事写成
+    _self_argv('--window')：那个函数是把角色名去掉两个横线当文件名用的
+    （'--panel' → panel.pyw），'--window' 会拼出一个不存在的 window.pyw。
+
+    打包成 exe 时命令行是 `exe --wallpaper --window`，main.py 的分发先认出
+    --wallpaper 这个角色，剩下的 --window 原样透给 wallpaper.main()。
+    """
+    argv = _self_argv('--wallpaper') + ['--window']
+    low = os.path.basename(argv[0]).lower()
+    if low.startswith('python.exe'):          # 有控制台版就地换成 pythonw
+        cand = os.path.join(os.path.dirname(argv[0]), 'pythonw.exe')
+        if os.path.exists(cand):
+            argv[0] = cand
+    return argv
+
+
+def spawn_preview():
+    """拉起小窗口预览进程，返回 Popen；失败返回 None。
+
+    必须是独立进程：本进程的窗口已经挂在桌面层（Progman 的分层子窗口），
+    同一个进程里再开一个 Tk 根窗口不是"多一个窗口"，而是两套事件循环抢
+    一个解释器。所以走的是"再跑一遍自己、换 --window 这个模式"。
+    """
+    import subprocess
+    if not getattr(sys, 'frozen', False):
+        if not os.path.exists(os.path.join(BASE, 'wallpaper.pyw')):
+            log('找不到 wallpaper.pyw，无法拉起预览窗口')
+            return None
+    argv = _preview_argv()
+    try:
+        flags = 0x00000008 | 0x08000000   # DETACHED_PROCESS | CREATE_NO_WINDOW
+        proc = subprocess.Popen(argv, cwd=BASE, env=_clean_env(),
+                                creationflags=flags, close_fds=True,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+        log('小窗口预览已拉起 (pid=%s)' % proc.pid)
+        return proc
+    except Exception as e:
+        log('拉起预览窗口失败: %r' % e)
+        return None
 
 
 # ================================================================ 图像工具
@@ -445,8 +595,8 @@ def make_placeholder(kind, w, h):
 
 
 # 遮罩 / 光晕的逐像素核心循环是纯 Python：192² 要 5~7ms，是"拖滑块不跟手"
-# 的最大一笔开销。但那张 ss×ss 的小图**只跟 feather / strength 有关，跟目标
-# 尺寸完全无关** —— 所以按参数把它缓存下来，每次只做一次 LANCZOS 放大（~0.3ms）。
+# 的最大一笔开销。但那张 ss×ss 的小图只跟 feather / strength 有关，跟目标
+# 尺寸完全无关 —— 所以按参数把它缓存下来，每次只做一次 LANCZOS 放大（~0.3ms）。
 #
 # 结果与原来逐字节相同：原实现本来就是"先算 ss×ss 再放大到 (w,h)"，
 # 这里只是把前半步的结果留下了，后半步一行没动。
@@ -729,6 +879,13 @@ class SpotlightWallpaper:
 
     def __init__(self, mode='desktop', selftest=False, bench=0):
         self.mode = mode            # desktop | window | full
+        # 这到底是不是一个"预览进程"。必须按用户点名的模式定，不能看 self.mode
+        # —— 桌面模式挂不上桌面层时会把它改写成 window（降级路径），那种进程
+        # 仍然是壁纸本体，pid 文件该由它管。
+        # 用途只有一个：pid 文件是壁纸本体的身份证（面板的「停止壁纸」按它
+        # taskkill、看护进程靠它握手），预览绝不能碰 —— 一写就把壁纸的 pid
+        # 顶掉了，于是"停止壁纸"杀的是预览、壁纸反而赖在桌面上关不掉。
+        self.is_preview = (mode == 'window')
         self.selftest = selftest
         self.bench_frames = int(bench or 0)   # >0 = 跑合成轨迹做性能基准
         self.attach_mode = '未挂载'
@@ -844,7 +1001,7 @@ class SpotlightWallpaper:
             # 安全模式：普通窗口，有标题栏，能拖能缩，× 直接关
             x = max(0, (self.sw - WINDOW_W) // 2)
             y = max(0, (self.sh - WINDOW_H) // 2 - 40)
-            self.root.title('聚光壁纸 · 预览（不会遮挡全屏，关闭点右上角 ×）')
+            self.root.title(WINDOW_TITLE)
             self.root.geometry('%dx%d+%d+%d' % (WINDOW_W, WINDOW_H, x, y))
             self.root.minsize(420, 260)
             self.root.protocol('WM_DELETE_WINDOW', self._quit)
@@ -855,6 +1012,7 @@ class SpotlightWallpaper:
             self.root.update_idletasks()
             self.canvas.config(width=self.cw, height=self.ch)
             self.root.bind('<Configure>', self._on_resize)
+            self._bring_to_front()
         else:
             # 桌面模式 / 全屏预览：无边框满屏
             self.root.overrideredirect(True)
@@ -874,6 +1032,30 @@ class SpotlightWallpaper:
         self.root.update_idletasks()
         self.ox = self.root.winfo_rootx()
         self.oy = self.root.winfo_rooty()
+
+    def _bring_to_front(self):
+        """把一个刚打开的预览窗口抬到最前面。
+
+        热键拉起它的时候，前台程序是用户当时正在用的那个，系统未必肯把
+        新窗口交出去 —— 表现就是"按了 Ctrl+Alt+W 好像没反应"（其实窗口
+        开在别的窗口后面）。短暂置顶一下最省事：置顶不看前台的脸色。
+
+        focus_force 是给 Esc 用的 —— 一个只能用鼠标点 × 的窗口等于没给
+        键盘留出口，而按了热键又伸出手去够鼠标，本身就是件别扭事。
+        """
+        try:
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.after(400, self._drop_topmost)
+            self.root.focus_force()
+        except Exception as e:
+            log('把预览窗口抬到前台失败（不影响使用）: %r' % e)
+
+    def _drop_topmost(self):
+        try:
+            self.root.attributes('-topmost', False)
+        except Exception:
+            pass
 
     def _grab_focus(self):
         """只有全屏预览才抢焦点；桌面模式下绝不抢，那会打断你干活"""
@@ -1139,6 +1321,9 @@ class SpotlightWallpaper:
         if act == 'panel':
             self._open_panel()
             return
+        if act == 'preview':
+            self._toggle_preview()
+            return
         try:
             if act == 'reload':
                 self._load_sources()
@@ -1265,11 +1450,11 @@ class SpotlightWallpaper:
         if self.selftest:
             return
         if self.mode == 'window':
-            text = '预览窗口 · 点右上角 × 关闭，或按 Esc / Ctrl+Alt+Q'
+            text = '预览窗口 · 关闭：右上角 × / Esc / Ctrl+Alt+W'
         elif self.mode == 'full':
             text = '全屏预览 · 按 Esc 退出（或 Ctrl+Alt+Q）'
         else:
-            text = ('壁纸已就位 · 控制面板 Ctrl+Alt+P'
+            text = ('壁纸已就位 · 控制面板 Ctrl+Alt+P · 预览窗口 Ctrl+Alt+W'
                     ' · 换图 Ctrl+Alt+1（外）/ 2（内） · 退出 Ctrl+Alt+Q')
         if self.fallback_reason and not extra:
             extra = '（%s，已自动切成小窗口）' % self.fallback_reason
@@ -1493,11 +1678,32 @@ class SpotlightWallpaper:
                     log('找不到 panel.pyw，无法打开控制面板')
                     return
             flags = 0x00000008 | 0x08000000   # DETACHED_PROCESS | CREATE_NO_WINDOW
-            subprocess.Popen(_self_argv('--panel'), cwd=BASE,
+            subprocess.Popen(_self_argv('--panel'), cwd=BASE, env=_clean_env(),
                              creationflags=flags, close_fds=True)
             log('控制面板已拉起')
         except Exception as e:
             log('打开控制面板失败: %r' % e)
+
+    def _toggle_preview(self):
+        """Ctrl+Alt+W：叫出 / 关掉小窗口预览。
+
+        做成开关而不是只开不关 —— 键盘按得出来的东西，也得键盘收得回去，
+        否则用户还得先把那个窗口从一堆窗口里翻出来再点 ×，反而不如直接双击
+        preview-window.bat。关的时候走"请它自己关"这条路（= 点 ×），
+        不 taskkill：强杀不给 Tk 收尾的机会。
+        """
+        if preview_running():
+            h = close_preview_window()
+            if h:
+                log('热键 Ctrl+Alt+W：请预览窗口关闭（hwnd=%s）' % h)
+            else:
+                # 互斥体还在、窗口却枚举不到：多半是预览正在起（Tk 窗口还没
+                # 建出来）或者正在退。这一下什么都不做才是对的 —— 再拉一个
+                # 就成了两个，正是那个互斥体要防的事。
+                log('热键 Ctrl+Alt+W：预览在跑但没枚举到窗口，本次不动'
+                    '（可能在启动或退出途中）')
+            return
+        spawn_preview()
 
     def _local_cursor(self):
         """把屏幕坐标换算成窗口内坐标（小窗口模式下两者不一样）"""
@@ -1632,8 +1838,8 @@ class SpotlightWallpaper:
     def _render(self, x, y):
         """把光斑画到 (x, y)。
 
-        核心思路：**在 PIL 里就把该混的色混完，交给 Tk 的永远是一张不透明的
-        成品图。** 这样 Tk 侧只有「贴一张不透明图 + 挪一下位置」两件事，
+        核心思路：在 PIL 里就把该混的色混完，交给 Tk 的永远是一张不透明的
+        成品图。 这样 Tk 侧只有「贴一张不透明图 + 挪一下位置」两件事，
         不做任何 alpha 合成 —— 那才是真正的性能杀手。
         """
         t0 = time.perf_counter()
@@ -1932,6 +2138,7 @@ class SpotlightWallpaper:
 
           Ctrl + Alt + Q   退出
           Ctrl + Alt + P   打开控制面板（选图 / 调光圈大小等，改完即时生效）
+          Ctrl + Alt + W   叫出 / 关掉小窗口预览（想在窗口里看效果时用）
           Ctrl + Alt + 1   换「光斑外」的图
           Ctrl + Alt + 2   换「光斑内」的图
           Ctrl + Alt + R   重新读取图片（刚往 images/ 里放了图时用）
@@ -1957,6 +2164,8 @@ class SpotlightWallpaper:
                             act = 'reload'
                         elif win32api.GetAsyncKeyState(0x50) < 0:    # P
                             act = 'panel'
+                        elif win32api.GetAsyncKeyState(0x57) < 0:    # W
+                            act = 'preview'
                         if act:
                             self._pending = act
                             time.sleep(0.45)      # 免得按住不放反复触发
@@ -2000,7 +2209,7 @@ class SpotlightWallpaper:
         except Exception:
             pass
         try:
-            if os.path.exists(PID_PATH):
+            if not self.is_preview and os.path.exists(PID_PATH):
                 os.remove(PID_PATH)
         except Exception:
             pass
@@ -2008,11 +2217,12 @@ class SpotlightWallpaper:
 
     # ------------------------------------------------------------ 启动
     def run(self):
-        try:
-            with open(PID_PATH, 'w') as f:
-                f.write(str(os.getpid()))
-        except Exception:
-            pass
+        if not self.is_preview:
+            try:
+                with open(PID_PATH, 'w') as f:
+                    f.write(str(os.getpid()))
+            except Exception:
+                pass
         log('启动完成 pid=%s 模式=%s 挂载=%s'
             % (os.getpid(), self.mode, self.attach_mode))
         if self.selftest:
@@ -2098,6 +2308,23 @@ def main():
         pass
 
     argv = sys.argv[1:]
+
+    # 只做"叫出 / 关掉预览"这一件事的入口，做完就退。
+    # 热键之外再开这个口子，是给想自己绑快捷键的人留的着落（桌面快捷方式、
+    # AutoHotkey 都行）；顺带让打包成 exe 之后那条拉起预览的路径能被直接验到
+    # —— 手动按热键没法自动化。
+    # 必须排在 already_running() 前面：壁纸正跑着的时候才最需要它。
+    if '--toggle-preview' in argv:
+        if preview_running():
+            h = close_preview_window()
+            if h:
+                log('--toggle-preview：请预览窗口关闭（hwnd=%s）' % h)
+            else:
+                log('--toggle-preview：预览在跑但没枚举到窗口，本次不动')
+        else:
+            spawn_preview()
+        return
+
     if '--restarted' in argv:
         time.sleep(1.5)      # 等旧进程彻底退出，免得互斥体还没释放
     if '--window' in argv:
@@ -2107,9 +2334,19 @@ def main():
     else:
         mode = 'desktop'
 
-    if already_running():
-        log('已有实例在运行，本次启动取消')
-        print('聚光壁纸已经在运行了。要重开请先双击「停止壁纸.bat」。')
+    if mode == 'window':
+        global LOG_TAG
+        LOG_TAG = '(预览) '      # 两路进程共写一个日志，标出来才分得清
+
+    # 预览和壁纸各认各的互斥体：按 Ctrl+Alt+W 时壁纸正跑着，共用一把锁的话
+    # 这次启动会被自己挡掉（旧行为），热键就成了摆设。
+    lock = MUTEX_PREVIEW if mode == 'window' else MUTEX_WALLPAPER
+    if already_running(lock):
+        log('已有同类实例在运行，本次启动取消')
+        if mode == 'window':
+            print('小窗口预览已经开着了。Ctrl+Alt+W 可以关掉它。')
+        else:
+            print('聚光壁纸已经在运行了。要重开请先双击「停止壁纸.bat」。')
         return
 
     save_default_config()

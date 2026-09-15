@@ -23,6 +23,7 @@
 
 需要当前 Python 里装有 pyinstaller / pillow / pywin32。
 """
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -62,7 +63,26 @@ def check():
         out('  先装：pip install pyinstaller pillow pywin32')
         return False
     out('· PyInstaller %s' % r.stdout.strip())
+    warn_fat_env()
     return True
+
+
+def warn_fat_env():
+    """提醒"别拿日常那个 Python 打包"。
+
+    日常环境里往往装着 numpy / scipy / opencv，而这个项目一个都不 import ——
+    可 PyInstaller 会被某些 hook 带着把它们整包塞进去。实测同一份代码：
+    干净 venv 出来 20 MB，系统 Python 出来 34 MB，多出来的全是没人用的东西。
+    体积事小，把一大坨用不上的解析器塞进发行物事大。
+    """
+    fat = [m for m in ('numpy', 'scipy', 'cv2', 'matplotlib', 'pandas',
+                       'pyarrow', 'sklearn')
+           if importlib.util.find_spec(m)]
+    if not fat:
+        return
+    out('! 这个环境里装着 %s。' % '、'.join(fat))
+    out('  本项目一个都不 import，它们进 exe 只是白胖（20 MB → 34 MB 实测过）。')
+    out('  想瘦下来：用一个只装 pyinstaller/pillow/pywin32 的虚拟环境打包。')
 
 
 def make_mirror():

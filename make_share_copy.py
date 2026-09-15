@@ -39,6 +39,7 @@ INCLUDE = [
     '_test_preview.py',
     '_probe_exit.py', '_probe_tray.py', '_probe_covered.py',
     '_probe_layout.py', '_probe_switch.py', '_probe_logheight.py',
+    '_probe_preview_hotkey.py',
     'images/README.txt',
 ]
 

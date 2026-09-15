@@ -83,7 +83,7 @@ loader.exec_module(P)
 BACKUP = open(CFG, encoding='utf-8').read() if os.path.exists(CFG) else None
 pre_pid = read_pid()
 we_started = False
-# 记下日志当前偏移：下面判"启动完成 / 挂载校验通过"只能看**本次新增**的那段。
+# 记下日志当前偏移：下面判"启动完成 / 挂载校验通过"只能看本次新增的那段。
 # 日志是只追加、从不清理的（早就几百 KB），拿全量去比等于让过去的运行替
 # 这一次背书 —— 本次进程没起来，那两条断言同样是绿的。同文件下面判参数
 # 变更用的就是 log_since(n0) 的偏移写法，这里原先漏了。
