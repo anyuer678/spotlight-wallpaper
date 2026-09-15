@@ -19,6 +19,13 @@ __pycache__/
 _ui_*.png
 _probe_*.png
 _switch_after.png
+_desktop_capture.png
+
+# packaging (build_exe.py)
+build/
+dist/
+.build_pkg/
+*.spec
 
 # local publishing helpers
 COMMIT_MSG.txt

@@ -29,6 +29,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 INCLUDE = [
     'wallpaper.pyw', 'panel.pyw', 'panel.html', 'index.html',
     'launch.pyw', 'autostart.py', 'make_share_copy.py', 'README.md',
+    'main.py', 'build_exe.py',
     '.gitignore', '.gitattributes',
     'start-wallpaper.bat', 'stop-wallpaper.bat', 'open-panel.bat',
     'preview-window.bat', '启动聚光壁纸.bat', '安装开机自启.bat',

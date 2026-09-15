@@ -10,6 +10,7 @@
 | **控制面板** | `open-panel.bat` | 只开面板（壁纸在跑就复用，不在跑会由面板拉起）。图形界面：选图、拖滑块、实时预览、看日志 |
 | **桌面版（真正的壁纸）** | `wallpaper.pyw` / `start-wallpaper.bat` | 只起壁纸。挂进 Windows 桌面层，待在桌面图标**下面**。图标照常显示、照常双击，不挡任何操作 |
 | **网页版（零依赖）** | `index.html` | 双击即可看效果，不需要 Python；也可交给 Lively Wallpaper / Wallpaper Engine 当动态壁纸 |
+| **单文件 exe**（可选） | `SpotlightWallpaper.exe` | 打包产物：一个 exe 搞定，目标机器不用装 Python。一条命令自己出包，见 [十一、打包成单个 exe](#十一打包成单个-exe) |
 
 ### 开机自启（可选）
 
@@ -360,6 +361,8 @@ spotlight-wallpaper/
 ├── panel.html               # 控制面板界面（单文件，零外部依赖）
 ├── launch.pyw               # 一键启动：缺的补上、在的抬起来（幂等，可反复双击）
 ├── autostart.py             # 开机自启的安装/移除/查询（往 shell:startup 放 .lnk）
+├── main.py                  # 打包成 exe 之后的入口：按命令行参数分发角色
+├── build_exe.py             # 打包脚本：一条命令打出单文件 exe
 ├── 启动聚光壁纸.bat          # ← 日常就双击这个
 ├── 安装开机自启.bat / 移除开机自启.bat
 ├── open-panel.bat           # 只开控制面板
@@ -488,3 +491,53 @@ python wallpaper.pyw --selftest    # 桌面层结构自检
      日志里一行都没有，托盘菜单的「退出面板」看起来就是点了没反应。
      点标题栏 × 时系统发的本来就是 `SC_CLOSE`，照抄它。（这条是
      `_probe_tray.py` 抓出来的，不是读代码读出来的 —— 静态看它“明明写了 WM_CLOSE 啊”。）
+
+---
+
+## 十一、打包成单个 exe（可选）
+
+目标机器不想装 Python，就把它打成一个 exe：
+
+```bash
+pip install pyinstaller pillow pywin32
+python build_exe.py
+```
+
+产物 `dist/SpotlightWallpaper.exe`，约 20 MB，拷给谁都能双击直接用。
+
+`build_exe.py` 会先把三个 `.pyw` 复制成 `.py` 再交给 PyInstaller。原因：源码方式
+跑时 `.pyw` 这个后缀是有意义的（双击不弹黑窗），打包时没有；而 PyInstaller 只把
+`.py` 当模块找，不认 `.pyw`。复制一份镜像给它分析，主项目一个字节都不用动。
+
+### 一个 exe，三个角色
+
+exe 里不再有 `.pyw` 文件可以"再拉一个进程"，所以所有拉起同伴的地方都改成
+**让 exe 换个角色重跑一遍自己**，靠命令行参数分（`main.py` 负责分发）：
+
+| 命令 | 干什么 |
+| --- | --- |
+| `SpotlightWallpaper.exe` | 起壁纸 + 开面板 —— **双击的默认行为**，等价于 `启动聚光壁纸.bat` |
+| `SpotlightWallpaper.exe --no-panel` | 只起壁纸（开机自启走这条） |
+| `SpotlightWallpaper.exe --window` | 小窗口预览（安全模式） |
+| `SpotlightWallpaper.exe --full` | 全屏预览 |
+| `SpotlightWallpaper.exe --autostart install\|remove\|status` | 开关开机自启 |
+| `SpotlightWallpaper.exe --version` | 看版本 |
+
+所以任务管理器里同时出现几个 `SpotlightWallpaper.exe` 是**正常的** —— 壁纸一个、
+面板一个，各自还带一个 PyInstaller 的引导进程。它们之间照样走单实例判重，不会重复。
+
+### 打包后这些文件在哪
+
+- **exe 旁边**：`wallpaper-config.json`、`wallpaper.log`、`*.pid`、`panel.ico`、
+  `images/`（你自己的两张图）—— 和源码版完全一样，只是位置换成 exe 所在目录。
+  单文件 exe 每次启动都会把代码解包到一个临时目录，配置写在那儿的话进程一退就
+  没了，所以路径全部按"exe 在哪儿"算。
+- **包内**：`panel.html`。它优先读 exe 旁边的那份（想改界面，放一份在那儿就行），
+  旁边没有才用包里自带的。
+
+### exe 用在哪、不用在哪
+
+打包版启动要解包，头一次比源码版慢两三秒；改了代码也得重新打包（约 30 秒）。
+自己在这台机器上用，源码版 + 双击 `启动聚光壁纸.bat` 更顺；exe 是给
+"要发给别人 / 换台电脑不想装 Python"准备的。
+

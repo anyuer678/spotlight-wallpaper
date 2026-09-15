@@ -23,7 +23,10 @@ import os
 import sys
 import time
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE = os.path.dirname(os.path.abspath(__file__))
 os.chdir(BASE)
 
 LOG_PATH = os.path.join(BASE, 'wallpaper.log')
@@ -70,6 +73,10 @@ def load_panel_module():
     只在确实要动面板时才 import：加载面板模块会连带加载壁纸渲染核心
     （panel 模块级 load_core()），没必要的加载就省掉。
     """
+    if getattr(sys, 'frozen', False):
+        # 包内模块：磁盘上没有 panel.pyw 可读，import 拿到的是同一份实现。
+        import panel
+        return panel
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         'panel', os.path.join(BASE, 'panel.pyw'))
@@ -112,7 +119,7 @@ def main():
             log('清掉过期 pid 文件（记录 %d，互斥量已不在）' % stale)
             PM._clear_pid()
         log('拉起壁纸进程')
-        PM._spawn('wallpaper.pyw')
+        PM._spawn('wallpaper')
         if wait_wallpaper_ready(WALLPAPER_WAIT_S):
             log('壁纸装载完成')
         else:
@@ -132,7 +139,7 @@ def main():
         log('面板已开着，抬到前台')
     else:
         log('拉起面板进程')
-        PM._spawn('panel.pyw')
+        PM._spawn('panel')
 
 
 if __name__ == '__main__':

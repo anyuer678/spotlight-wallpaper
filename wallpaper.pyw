@@ -51,10 +51,27 @@ import win32api
 import win32con
 import win32gui
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe 之后 __file__ 指向临时解包目录 —— 进程一退就被清掉，
+# 日志和配置写在那儿等于没写。exe 所在目录才是用户看得见、改得动的家。
+if getattr(sys, 'frozen', False):
+    BASE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE = os.path.dirname(os.path.abspath(__file__))
 LOG_PATH = os.path.join(BASE, 'wallpaper.log')
 PID_PATH = os.path.join(BASE, 'wallpaper.pid')
 CFG_PATH = os.path.join(BASE, 'wallpaper-config.json')
+
+
+def _self_argv(role):
+    """拼出"再跑一遍自己"的命令行（role 形如 '--panel'）。
+
+    打包成 exe 之后程序里没有 panel.pyw 这个文件可以拉 —— 只能让 exe 换个
+    角色重跑一遍自己；没打包时仍旧拉脚本。两种情况下调用方看到的语义完全
+    一样，调用点不必关心自己是哪一种。
+    """
+    if getattr(sys, 'frozen', False):
+        return [sys.executable, role]
+    return [sys.executable, os.path.join(BASE, role[2:] + '.pyw')]
 
 # ---------------------------------------------------------------- 默认配置
 DEFAULT_CFG = {
@@ -1470,12 +1487,13 @@ class SpotlightWallpaper:
         """
         try:
             import subprocess
-            panel = os.path.join(BASE, 'panel.pyw')
-            if not os.path.exists(panel):
-                log('找不到 panel.pyw，无法打开控制面板')
-                return
+            if not getattr(sys, 'frozen', False):
+                panel = os.path.join(BASE, 'panel.pyw')
+                if not os.path.exists(panel):
+                    log('找不到 panel.pyw，无法打开控制面板')
+                    return
             flags = 0x00000008 | 0x08000000   # DETACHED_PROCESS | CREATE_NO_WINDOW
-            subprocess.Popen([sys.executable, panel], cwd=BASE,
+            subprocess.Popen(_self_argv('--panel'), cwd=BASE,
                              creationflags=flags, close_fds=True)
             log('控制面板已拉起')
         except Exception as e:
@@ -1877,7 +1895,7 @@ class SpotlightWallpaper:
 
         try:
             flags = 0x00000008 | 0x08000000      # DETACHED_PROCESS | CREATE_NO_WINDOW
-            subprocess.Popen([sys.executable, os.path.abspath(__file__), '--restarted'],
+            subprocess.Popen(_self_argv('--wallpaper') + ['--restarted'],
                              cwd=BASE, creationflags=flags, close_fds=True)
             log('看护：新进程已拉起')
         except Exception as e:

@@ -67,14 +67,28 @@ import win32gui
 
 from PIL import Image, ImageDraw
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+# 打包成 exe 之后分两种目录，各管各的：
+#   数据（配置/日志/pid/图片）住 exe 旁边 —— 用户要能看见、能改、能留；
+#   随包资源（panel.html）解包在 _MEIPASS，只读、每次启动都是新的。
+FROZEN = getattr(sys, 'frozen', False)
+if FROZEN:
+    BASE = os.path.dirname(os.path.abspath(sys.executable))
+    RES_DIR = getattr(sys, '_MEIPASS', BASE)
+else:
+    BASE = RES_DIR = os.path.dirname(os.path.abspath(__file__))
+
 CFG_PATH = os.path.join(BASE, 'wallpaper-config.json')
 CFG_TMP = CFG_PATH + '.tmp'
 PID_PATH = os.path.join(BASE, 'wallpaper.pid')
 LOG_PATH = os.path.join(BASE, 'wallpaper.log')
 WALLPAPER = os.path.join(BASE, 'wallpaper.pyw')
-PAGE = os.path.join(BASE, 'panel.html')
 IMAGES_DIR = os.path.join(BASE, 'images')
+
+# 界面文件先看 exe / 源码旁边，没有才退回包内那份。打包版即使旁边空空如也
+# 也能开界面；想把界面单独放出来改的，把 panel.html 拷到 exe 旁边就行。
+_page_beside = os.path.join(BASE, 'panel.html')
+PAGE = _page_beside if os.path.exists(_page_beside) \
+    else os.path.join(RES_DIR, 'panel.html')
 
 VERSION = '2.0'
 WINDOW_TITLE = '聚光壁纸 · 控制面板'
@@ -140,7 +154,13 @@ def load_core():
 
     wallpaper.pyw 里所有"会建窗口"的代码都在 main() 里且有 __main__ 保护，
     所以加载它不会顺手开一个壁纸出来。
+
+    打包成 exe 之后磁盘上没有 wallpaper.pyw 这个文件可读 —— 它已经作为模块
+    编进包里了，import 拿到的是同一份实现。
     """
+    if FROZEN:
+        import wallpaper
+        return wallpaper
     loader = importlib.machinery.SourceFileLoader('spotlight_core', WALLPAPER)
     spec = importlib.util.spec_from_loader('spotlight_core', loader)
     mod = importlib.util.module_from_spec(spec)
@@ -1065,7 +1085,7 @@ class Handler(BaseHTTPRequestHandler):
         if name == 'start':
             if alive:
                 return self._json({'ok': True, 'note': '已经在跑了', 'state': build_state()})
-            _spawn(WALLPAPER)
+            _spawn('wallpaper')
             log('面板：请求启动壁纸')
         elif name == 'stop':
             if not alive:
@@ -1078,7 +1098,7 @@ class Handler(BaseHTTPRequestHandler):
             if alive:
                 _kill(pid)
                 time.sleep(1.2)
-            _spawn(WALLPAPER)
+            _spawn('wallpaper')
             log('面板：请求重启壁纸')
         elif name == 'reset':
             # 读一次盘就够。原来这一小段里连调了 4 次 cfg_read()，每回都是一次
@@ -1153,22 +1173,32 @@ SERVER_INTENT = {'stop': False}
 SERVE_ONLY = {'on': False}
 
 
-def _spawn(script):
-    """拉一个脱离本进程的壁纸进程。
+def _spawn(role):
+    """拉一个脱离本进程的同伴（role 是 'wallpaper' 或 'panel'）。
 
     CREATE_NO_WINDOW 而不是 DETACHED_PROCESS：两者语义不同，而
     DETACHED_PROCESS 会让子进程连标准句柄都没有，配合 pythonw 反而更容易
     被某些环境连带清理。CREATE_NO_WINDOW 已经是"没有控制台窗口"了。
+
+    打包成 exe 之后没有 .pyw 可以拉 —— 让 exe 换个角色重跑一遍自己。
+    PyInstaller 会把解包目录经 _PYI_ 前缀的环境变量传给子进程，好让它复用
+    父进程那一份；这里必须摘干净：父进程随时可能退出并删掉解包目录，同伴
+    进程还指着那个目录读界面的就会扑空。各解各的包，互不牵连。
     """
-    exe = sys.executable
-    low = os.path.basename(exe).lower()
+    if FROZEN:
+        argv = [sys.executable, '--' + role]
+    else:
+        argv = [sys.executable, os.path.join(BASE, role + '.pyw')]
+    low = os.path.basename(argv[0]).lower()
     if low.startswith('python.exe'):          # 有控制台版就地换成 pythonw
-        cand = os.path.join(os.path.dirname(exe), 'pythonw.exe')
+        cand = os.path.join(os.path.dirname(argv[0]), 'pythonw.exe')
         if os.path.exists(cand):
-            exe = cand
+            argv[0] = cand
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('_PYI_') and k != '_MEIPASS2'}
     CREATE_NO_WINDOW = 0x08000000
     DETACHED_PROCESS = 0x00000008
-    return subprocess.Popen([exe, script], cwd=BASE,
+    return subprocess.Popen(argv, cwd=BASE, env=env,
                             creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
                             close_fds=True,
                             stdin=subprocess.DEVNULL,
@@ -2312,7 +2342,7 @@ class Tray(object):
             if pid and pid_alive(pid):
                 _kill(pid)
                 time.sleep(1.2)
-            _spawn(WALLPAPER)
+            _spawn('wallpaper')
             log('托盘：请求重启壁纸')
         except Exception as e:
             log('托盘重启壁纸失败: %r' % e)
@@ -2413,7 +2443,8 @@ def main(argv):
 
     serve_only = '--serve-only' in argv
     SERVE_ONLY['on'] = serve_only
-    if not os.path.exists(WALLPAPER):
+    if not FROZEN and not os.path.exists(WALLPAPER):
+        # 打包版里 wallpaper 是包内模块，磁盘上没有这个文件 —— 别在这儿拦。
         _die('找不到 %s，面板无法工作。' % WALLPAPER)
         return 2
     if not os.path.exists(PAGE):
@@ -2440,7 +2471,12 @@ def main(argv):
     PANEL_ORIGIN = 'http://127.0.0.1:%d' % _PORT
     url = PANEL_ORIGIN + '/'
     log('面板服务已起：%s（pid=%d）' % (url, os.getpid()))
-    print('PANEL_URL %s' % url, flush=True)
+    # 打包成 exe 是窗口子系统，没有控制台时 sys.stdout 就是 None ——
+    # 裸 print 会直接抛异常，把"面板起好了"这件事本身变成崩溃。
+    try:
+        print('PANEL_URL %s' % url, flush=True)
+    except (OSError, ValueError, AttributeError):
+        pass
     # 单实例登记只属于"有窗口"的那种模式。`--serve-only` 是测试用的无窗口模式，
     # 它跑完就走，绝不能让它去登记/清除：否则它会覆盖掉真面板的 pid 记录，
     # 退出时又把真面板的记录删掉 —— 于是真面板还在跑，单实例判据却已经失灵。

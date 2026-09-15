@@ -19,7 +19,11 @@ WScript.Shell —— 不自己拼 .lnk 二进制，也不引入新依赖。
 import os
 import sys
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+FROZEN = getattr(sys, 'frozen', False)
+if FROZEN:
+    BASE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE = os.path.dirname(os.path.abspath(__file__))
 LNK_NAME = '聚光壁纸.lnk'
 LAUNCH = os.path.join(BASE, 'launch.pyw')
 
@@ -56,13 +60,19 @@ def lnk_path():
 
 
 def install():
-    if not os.path.exists(LAUNCH):
-        out('✗ 找不到 %s' % LAUNCH)
-        return 1
+    # 打包成 exe 之后没有 pythonw + launch.pyw 这条链了，"目标"就是 exe
+    # 自己，靠 --no-panel 这个参数换角色；没打包时仍旧指向 launch.pyw。
+    if FROZEN:
+        target, args = sys.executable, '--no-panel'
+    else:
+        if not os.path.exists(LAUNCH):
+            out('✗ 找不到 %s' % LAUNCH)
+            return 1
+        target, args = find_pythonw(), '"%s" --no-panel' % LAUNCH
     ws = shell()
     lnk = ws.CreateShortcut(lnk_path())
-    lnk.TargetPath = find_pythonw()
-    lnk.Arguments = '"%s" --no-panel' % LAUNCH
+    lnk.TargetPath = target
+    lnk.Arguments = args
     lnk.WorkingDirectory = BASE
     ico = os.path.join(BASE, 'panel.ico')
     if os.path.exists(ico):
