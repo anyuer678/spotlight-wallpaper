@@ -10,7 +10,7 @@
 | **控制面板** | `open-panel.bat` | 只开面板（壁纸在跑就复用，不在跑会由面板拉起）。图形界面：选图、拖滑块、实时预览、看日志 |
 | **桌面版（真正的壁纸）** | `wallpaper.pyw` / `start-wallpaper.bat` | 只起壁纸。挂进 Windows 桌面层，待在桌面图标**下面**。图标照常显示、照常双击，不挡任何操作 |
 | **网页版（零依赖）** | `index.html` | 双击即可看效果，不需要 Python；也可交给 Lively Wallpaper / Wallpaper Engine 当动态壁纸 |
-| **单文件 exe**（可选） | `SpotlightWallpaper.exe` | 打包产物：一个 exe 搞定，目标机器不用装 Python。一条命令自己出包，见 [十一、打包成单个 exe](#十一打包成单个-exe) |
+| **单文件 exe**（可选） | `SpotlightWallpaper.exe` | 一个 exe 搞定，目标机器不用装 Python。**[直接下载](https://github.com/anyuer678/spotlight-wallpaper/releases/latest)**，或自己出包见 [十一、打包成单个 exe](#十一打包成单个-exe) |
 
 ### 开机自启（可选）
 
@@ -504,7 +504,12 @@ python wallpaper.pyw --selftest    # 桌面层结构自检
 
 ## 十一、打包成单个 exe（可选）
 
-目标机器不想装 Python，就把它打成一个 exe：
+**想直接用现成的，去 [Releases](https://github.com/anyuer678/spotlight-wallpaper/releases/latest)
+下载 `SpotlightWallpaper.exe`** —— 约 20 MB，Windows 10/11 64 位，双击即用，
+不用管下面这些。第一次运行会在 exe 旁边生成 `wallpaper-config.json`（你的设置）和
+`wallpaper.log`（运行日志）；图片不用放进任何目录，在面板里选就行。
+
+想自己出包（改了代码、或想要自己的图打进去）：
 
 ```bash
 pip install pyinstaller pillow pywin32
