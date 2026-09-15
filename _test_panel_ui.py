@@ -48,6 +48,22 @@ def check(name, ok, detail=''):
                          ('   ← ' + str(detail)) if (detail and not ok) else ''))
 
 
+def port_busy(port):
+    """端口上已经有人在监听吗。
+
+    端口是写死的一个值。万一上次跑崩留下个 --serve-only 实例，新进程 bind 会
+    直接失败退出，而下面的 ready 轮询会被**旧实例**应答 —— 于是整套测试跑在
+    旧代码上，还一点异常都看不出来。宁可当场报错，也不要静默测错对象。
+    """
+    import socket
+    s = socket.socket()
+    try:
+        s.settimeout(0.4)
+        return s.connect_ex(('127.0.0.1', port)) == 0
+    finally:
+        s.close()
+
+
 def cfg_now():
     try:
         return json.load(open(CFG, encoding='utf-8'))
@@ -115,6 +131,10 @@ def set_val(pg, key, value):
 
 
 print('【0】准备：面板服务 + 壁纸主程序')
+if port_busy(PORT):
+    print('  端口 %d 已被占用（上次的残留实例？）→ 拒绝继续，'
+          '否则整套测试会跑在旧进程上' % PORT)
+    sys.exit(1)
 srv = subprocess.Popen([sys.executable, os.path.join(BASE, 'panel.pyw'),
                         '--serve-only', '--port', str(PORT)],
                        cwd=BASE, stdout=subprocess.DEVNULL,

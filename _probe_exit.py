@@ -68,7 +68,7 @@ _PYW = os.path.join(os.environ.get('LOCALAPPDATA', ''),
                     'Programs', 'Python', 'Python312', 'pythonw.exe')
 PYW = _PYW if os.path.exists(_PYW) else sys.executable
 
-ok_n, bad_n = 0, 0
+ok_n, bad_n, skip_n = 0, 0, 0
 
 
 def check(name, ok, detail=''):
@@ -79,6 +79,18 @@ def check(name, ok, detail=''):
         bad_n += 1
     tail = ('  — %s' % (detail,)) if detail != '' else ''
     print('%s %s%s' % ('[ok]' if ok else '[!!]', name, tail), flush=True)
+
+
+def skip(n, name, detail=''):
+    """明说"这几项这次没跑"。
+
+    跳过的项如果只是 print 一行就 return，汇总数字会把它们悄悄算成覆盖过的
+    部分 —— 看到"33 通过 / 0 失败"的人会以为规则 B 那条链路也验过了。
+    """
+    global skip_n
+    skip_n += n
+    tail = ('  — %s' % (detail,)) if detail != '' else ''
+    print('[--] 跳过 %d 项：%s%s' % (n, name, tail), flush=True)
 
 
 def load_module(fname, modname):
@@ -543,8 +555,8 @@ def part_d():
         # 给什么、沙箱内外都一样 —— 这是测试环境的限制，不是探测代码的
         # 问题（SPI_GET 正常、探测逻辑 C 段已验证）。真实验证请用户在
         # 「设置 → 个性化 → 背景」里换一次壁纸，看面板提示条亮不亮。
-        print('   ⚠ 此环境无法改系统壁纸（SPI_SET 静默失败），D 段跳过；'
-              '请手动在系统设置里换一次壁纸做真实验证。', flush=True)
+        skip(3, '系统壁纸真实变化（本环境 SPI_SET 静默失败）',
+             '请手动在系统设置里换一次壁纸，看面板提示条亮不亮')
         return
 
     try:
@@ -584,7 +596,8 @@ def main():
     finally:
         restore_state()
 
-    print('\n========== 结果：%d 通过 / %d 失败 ==========' % (ok_n, bad_n))
+    print('\n========== 结果：%d 通过 / %d 失败 / %d 跳过 =========='
+          % (ok_n, bad_n, skip_n))
 
     # 收尾：把用户的常驻状态恢复 —— 壁纸跑着（新代码），面板停着（用户自己关的）
     if not pid_alive(read_pid_file(WP_PID)):

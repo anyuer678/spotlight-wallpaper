@@ -48,6 +48,7 @@ LOG = os.path.join(BASE, 'wallpaper.log')
 PIDFILE = os.path.join(BASE, 'panel.pid')
 ICON = os.path.join(BASE, 'panel.ico')
 WALLPAPER_PID = os.path.join(BASE, 'wallpaper.pid')
+CFG = os.path.join(BASE, 'wallpaper-config.json')
 
 _PYW = os.path.join(os.environ.get('LOCALAPPDATA', ''),
                     'Programs', 'Python', 'Python312', 'pythonw.exe')
@@ -155,6 +156,57 @@ def drop_pid(path):
         pass
 
 
+def read_cfg_text():
+    try:
+        with open(CFG, 'r', encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def restore_cfg_text(text):
+    if text is None:
+        return
+    try:
+        with open(CFG, 'w', encoding='utf-8', newline='') as f:
+            f.write(text)
+    except OSError:
+        pass
+
+
+def set_exit_action(value):
+    """把 panel_exit_action 设成确定值，别的键一个字不动。
+
+    最后两项断言（关窗后面板自己收摊 / panel.pid 被清掉）要求"关窗即退出"。
+    可 panel_exit_action='ask'（出厂默认）时，标题栏 × 那条路会弹出"三选一"
+    对话框等人点 —— 无人值守下没人点，25 秒必然超时。原来这个探针没管它，
+    于是过不过全看"上一次运行恰好把配置留成了什么值"。这里自己把前置条件
+    摆好，跑完在 finally 里原样恢复。
+    """
+    try:
+        with open(CFG, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    cfg['panel_exit_action'] = value
+    with open(CFG, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def _report(ok_n, bad_n):
+    """打印汇总并按失败数决定退出码。
+
+    必须由每条出口路径显式调用。main 里有几处"前置条件不满足就提前 return"，
+    而那些恰恰是最要紧的失败（面板服务起不来、托盘装不上、窗口找不到）。
+    汇总原先是写在 try/finally 之后的，提前 return 直接把它跳过 —— 探针以
+    退出码 0 结束、连汇总行都不打印，只看退出码判活的 runner 会当成通过。
+    """
+    print('\n===== 托盘体检：%d 项通过 / %d 项失败 =====' % (ok_n, bad_n))
+    sys.exit(1 if bad_n else 0)
+
+
 def main():
     if os.path.exists(PIDFILE):
         old = open(PIDFILE).read().strip()
@@ -168,6 +220,9 @@ def main():
     spec = importlib.util.spec_from_file_location('pm', os.path.join(BASE, 'panel.pyw'))
     pm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pm)
+
+    cfg_backup = read_cfg_text()
+    set_exit_action('keep_wallpaper')
 
     base = log_size()
     if os.path.exists(ICON):
@@ -184,7 +239,7 @@ def main():
         url = find_url(base)
         if not url:
             check('面板服务起得来', False, '30 秒内日志里没出现"面板服务已起"')
-            return
+            return _report(ok_n, bad_n)
         check('面板服务起得来', True, url)
 
         # ---------------------------------------------------------- 1. 图标装上
@@ -199,7 +254,7 @@ def main():
         if not wait_for(tray_ready, 15, label='托盘图标装上'):
             check('托盘图标装进通知区域', False,
                   (st or {}).get('tray', {}).get('error') or 'tray.active 一直为假')
-            return
+            return _report(ok_n, bad_n)
         check('托盘图标装进通知区域', True, 'hwnd=%d' % st['tray']['hwnd'])
 
         # ---------------------------------------------------------- 2. 结构体
@@ -221,7 +276,7 @@ def main():
         wait_for(win_ready, 25, label='面板窗口出现')
         check('找得到面板窗口', bool(hwnd), 'hwnd=%d' % hwnd)
         if not hwnd:
-            return
+            return _report(ok_n, bad_n)
         check('面板窗口标题正确',
               pm.CORE.win32gui.GetWindowText(hwnd) == pm.WINDOW_TITLE,
               repr(pm.CORE.win32gui.GetWindowText(hwnd)))
@@ -278,11 +333,11 @@ def main():
             kill_tree(pid)
             time.sleep(0.8)
         drop_pid(PIDFILE)
+        restore_cfg_text(cfg_backup)
         if os.path.exists(WALLPAPER_PID):
             print('（提示：wallpaper.pid 还在，壁纸进程不受本次体检影响）')
 
-    print('\n===== 托盘体检：%d 项通过 / %d 项失败 =====' % (ok_n, bad_n))
-    sys.exit(1 if bad_n else 0)
+    _report(ok_n, bad_n)
 
 
 def _alive(pid):

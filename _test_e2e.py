@@ -83,6 +83,11 @@ loader.exec_module(P)
 BACKUP = open(CFG, encoding='utf-8').read() if os.path.exists(CFG) else None
 pre_pid = read_pid()
 we_started = False
+# 记下日志当前偏移：下面判"启动完成 / 挂载校验通过"只能看**本次新增**的那段。
+# 日志是只追加、从不清理的（早就几百 KB），拿全量去比等于让过去的运行替
+# 这一次背书 —— 本次进程没起来，那两条断言同样是绿的。同文件下面判参数
+# 变更用的就是 log_since(n0) 的偏移写法，这里原先漏了。
+log_off = log_size()
 
 # ---------------------------------------------------------------- 1. 起主程序
 print('【1】启动壁纸主程序')
@@ -109,10 +114,15 @@ while time.time() < deadline:
 
 check('主程序起来了', bool(pid) and alive(pid), 'pid=%r' % pid)
 time.sleep(3.0)                      # 等它挂上桌面层、把状态写完
-tail = log_since(0)
-check('日志里有启动完成记录', '启动完成' in tail, tail[-200:])
-check('挂载层级正确（DefView 在它上面）',
-      '挂载校验通过' in tail, tail[-300:])
+tail = log_since(log_off)
+if we_started:
+    check('日志里有启动完成记录', '启动完成' in tail, tail[-200:])
+    check('挂载层级正确（DefView 在它上面）',
+          '挂载校验通过' in tail, tail[-300:])
+else:
+    # 复用了已在跑的进程 = 本次没有启动动作，这两项无从验证。明说跳过，
+    # 别让它冒充通过。
+    print('  · 复用已在运行的壁纸进程 → 跳过"本次启动日志"两项断言')
 
 # ---------------------------------------------------------------- 2. 起面板服务
 httpd = ThreadingHTTPServer(('127.0.0.1', 0), P.Handler)
