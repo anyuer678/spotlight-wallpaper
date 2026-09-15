@@ -1188,7 +1188,6 @@ async function boot() {
     if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
   });
   // 关窗时前端别拦着
-  window.addEventListener('beforeunload', () => { try { navigator.sendBeacon && 0; } catch (e) {} });
 
   await tick(true);
   logTimer = setInterval(() => { if ($('log-auto').checked) refreshLog(); }, 3000);

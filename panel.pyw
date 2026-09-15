@@ -541,9 +541,11 @@ class SceneCache(object):
                     im = None
                     if p:
                         try:
-                            im = Image.open(p)
-                            im.load()
-                            im = im.convert('RGB')
+                            # 用 with 立刻放掉句柄：Windows 上没关的句柄会让
+                            # 这个文件在资源管理器/别的程序里显示"被占用"。
+                            with Image.open(p) as src_im:
+                                src_im.load()
+                                im = src_im.convert('RGB')
                         except Exception as e:
                             log('面板读图失败 %s: %r' % (p, e))
                             im = None
@@ -556,7 +558,6 @@ class SceneCache(object):
                 }
                 self.token = token
                 self.box = {}
-                self.box_token = None
             return self.full
 
     def view(self, side, box, vw, vh):
@@ -987,13 +988,17 @@ class Handler(BaseHTTPRequestHandler):
         if not path:
             log('选图被取消（%s）' % side)
             return self._json({'ok': True, 'canceled': True})
-        cfg = cfg_read()
-        cfg[side] = path
-        try:
-            cfg['rev'] = int(cfg.get('rev', 0) or 0) + 1
-        except (TypeError, ValueError):
-            cfg['rev'] = 1
-        cfg_write(cfg)
+        # 和 apply_config 一个规矩：读磁盘 → 改 → 落盘整段持锁。
+        # 上面那次 pick_image_file 会阻塞几十秒（系统选图框挂在那儿），
+        # 绝不能包进锁里 —— 那会把面板的其他请求全堵死。
+        with _CFG_LOCK:
+            cfg = cfg_read()
+            cfg[side] = path
+            try:
+                cfg['rev'] = int(cfg.get('rev', 0) or 0) + 1
+            except (TypeError, ValueError):
+                cfg['rev'] = 1
+            cfg_write(cfg)
         log('选图 %s → %s' % (side, path))
         SCENE.token = None            # 立刻让预览缓存失效，别显示旧图
         return self._json({'ok': True, 'path': path, 'state': build_state()})
@@ -1039,13 +1044,14 @@ class Handler(BaseHTTPRequestHandler):
         else:
             im.save(dest)
         rel = os.path.relpath(dest, BASE).replace('\\', '/')
-        cfg = cfg_read()
-        cfg[side] = rel
-        try:
-            cfg['rev'] = int(cfg.get('rev', 0) or 0) + 1
-        except (TypeError, ValueError):
-            cfg['rev'] = 1
-        cfg_write(cfg)
+        with _CFG_LOCK:
+            cfg = cfg_read()
+            cfg[side] = rel
+            try:
+                cfg['rev'] = int(cfg.get('rev', 0) or 0) + 1
+            except (TypeError, ValueError):
+                cfg['rev'] = 1
+            cfg_write(cfg)
         SCENE.token = None
         log('拖入图片 %s → %s（%dx%d，%.1f MB 源文件）'
             % (side, rel, im.width, im.height, n / 1048576.0))
@@ -1075,22 +1081,26 @@ class Handler(BaseHTTPRequestHandler):
             _spawn(WALLPAPER)
             log('面板：请求重启壁纸')
         elif name == 'reset':
-            cfg = dict(CORE.DEFAULT_CFG)
-            cfg['outer'] = cfg_read().get('outer', cfg['outer'])
-            cfg['inner'] = cfg_read().get('inner', cfg['inner'])
-            for k in PANEL_ONLY_KEYS:
-                # 「恢复默认」恢复的是效果参数。panel_exit_action 这类
-                # 只属于面板的设置不属于"效果" —— 一起清掉的话，用户勾了
-                # 「不再询问」之后点一下这个按钮，下一次退出又开始弹框，
-                # 而且找不到任何提示能解释为什么。
-                cur = cfg_read().get(k)
-                if cur is not None:
-                    cfg[k] = cur
-            try:
-                cfg['rev'] = int(cfg_read().get('rev', 0) or 0) + 1
-            except (TypeError, ValueError):
-                cfg['rev'] = 1
-            cfg_write(cfg)
+            # 读一次盘就够。原来这一小段里连调了 4 次 cfg_read()，每回都是一次
+            # open + json 解析；更要紧的是 4 次读之间配置可能被滑块写入换掉，
+            # 于是"恢复默认"会拿一份拼接出来的、现实中不存在的配置覆盖回去。
+            with _CFG_LOCK:
+                cur = cfg_read()
+                cfg = dict(CORE.DEFAULT_CFG)
+                cfg['outer'] = cur.get('outer', cfg['outer'])
+                cfg['inner'] = cur.get('inner', cfg['inner'])
+                for k in PANEL_ONLY_KEYS:
+                    # 「恢复默认」恢复的是效果参数。panel_exit_action 这类
+                    # 只属于面板的设置不属于"效果" —— 一起清掉的话，用户勾了
+                    # 「不再询问」之后点一下这个按钮，下一次退出又开始弹框，
+                    # 而且找不到任何提示能解释为什么。
+                    if cur.get(k) is not None:
+                        cfg[k] = cur.get(k)
+                try:
+                    cfg['rev'] = int(cur.get('rev', 0) or 0) + 1
+                except (TypeError, ValueError):
+                    cfg['rev'] = 1
+                cfg_write(cfg)
             log('面板：恢复默认参数（图片和面板设置不动）')
             return self._json({'ok': True, 'state': build_state()})
         elif name == 'reload':
@@ -2452,6 +2462,7 @@ def main(argv):
         except KeyboardInterrupt:
             pass
         httpd.shutdown()
+        httpd.server_close()      # 和正常退出那条路一样，把监听 socket 放掉
         return 0
 
     proc, profile = launch_window(url)
