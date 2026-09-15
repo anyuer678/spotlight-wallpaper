@@ -18,6 +18,7 @@ __pycache__/
 *.pyc
 _ui_*.png
 _probe_*.png
-_probe_*.py.out
 _switch_after.png
+
+# local publishing helpers
 COMMIT_MSG.txt

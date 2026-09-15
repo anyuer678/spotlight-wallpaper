@@ -1,0 +1,12 @@
+# 统一换行符：仓库里一律存 LF，Windows 上 .bat 取出来是 CRLF
+* text=auto
+*.py   text eol=lf
+*.pyw  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+*.bat  text eol=crlf
+*.ico  binary
+*.jpg  binary
+*.png  binary

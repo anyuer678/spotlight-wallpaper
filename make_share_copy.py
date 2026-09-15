@@ -29,6 +29,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 INCLUDE = [
     'wallpaper.pyw', 'panel.pyw', 'panel.html', 'index.html',
     'launch.pyw', 'autostart.py', 'make_share_copy.py', 'README.md',
+    '.gitignore', '.gitattributes',
     'start-wallpaper.bat', 'stop-wallpaper.bat', 'open-panel.bat',
     'preview-window.bat', '启动聚光壁纸.bat', '安装开机自启.bat',
     '移除开机自启.bat',
@@ -76,9 +77,17 @@ def main():
     dest = os.path.abspath(dest)
 
     if os.path.isdir(dest):
-        out('· 输出目录已存在，先清空：%s' % dest)
-        shutil.rmtree(dest)
-    os.makedirs(dest)
+        out('· 输出目录已存在，先清空（保留 .git）：%s' % dest)
+        for name in os.listdir(dest):
+            # 输出目录常常就是这个仓库的工作副本 —— 绝不能连版本库一起删掉
+            if name == '.git':
+                continue
+            p = os.path.join(dest, name)
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+            else:
+                os.remove(p)
+    os.makedirs(dest, exist_ok=True)
 
     copied, replaced, missing, leaked = [], {}, [], []
 
