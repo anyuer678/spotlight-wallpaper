@@ -19,10 +19,15 @@
        —— 这就是"单击托盘图标"本身，和真人点下去走的是同一条消息
        → 窗口回到可见、hidden 复位
     6. 界面按钮那条路（POST /api/action {action:to-tray} / from-tray）
-    7. 最后往面板窗口发 WM_CLOSE（托盘菜单"退出面板"走的就是它）
+    7. 用 close_panel_window() 关掉面板窗口（托盘菜单"退出面板"走的就是它）
        → 面板进程自己收摊：摘图标、清 panel.pid、删临时 profile
 
 全程只碰自己的进程。用完之后如果进程还在，用 /T 连子进程一起收掉。
+
+前置条件：脚本会把配置里的 panel_exit_action 临时设成 keep_wallpaper ——
+'ask'（出厂默认）时关窗会弹出"三选一"对话框等人点，无人值守下没人点就
+只能超时，最后两项断言于是"看上次运行留下的配置值"过或不过。跑完在
+finally 里把配置文件原样写回去。
 
     python _probe_tray.py
 """
