@@ -43,52 +43,56 @@ jobs:
           from pathlib import Path
 
           skip_names = {'_test_e2e.py'}  # Windows wallpaper APIs
-          optional = {'playwright', 'PIL'}  # skip file if import missing
+          optional = {'playwright', 'PIL'}
 
-          def has_optional_import(path: Path) -> bool:
+          def optional_imports(path: Path) -> set:
               try:
                   tree = ast.parse(path.read_text(encoding='utf-8', errors='ignore'))
               except Exception:
-                  return False
+                  return set()
+              found = set()
               for node in ast.walk(tree):
                   if isinstance(node, ast.Import):
                       for a in node.names:
-                          if a.name.split('.')[0] in optional:
-                              return True
+                          root = a.name.split('.')[0]
+                          if root in optional:
+                              found.add(root)
                   elif isinstance(node, ast.ImportFrom):
-                      if node.module and node.module.split('.')[0] in optional:
-                          return True
-              return False
+                      if node.module:
+                          root = node.module.split('.')[0]
+                          if root in optional:
+                              found.add(root)
+              return found
 
           files = [p for p in list(Path('.').glob('_test_*.py')) + list(Path('tests').glob('test_*.py'))
                    if p.name not in skip_names]
           failed = []
           skipped = []
+          ran = []
           for f in files:
-              if has_optional_import(f):
-                  missing = []
-                  for mod in optional:
-                      if importlib.util.find_spec(mod) is None:
-                          missing.append(mod)
-                  if missing:
-                      skipped.append(f"{f} (missing {missing})")
-                      print('SKIP', f, 'missing', missing)
-                      continue
+              need = optional_imports(f)
+              missing = [m for m in need if importlib.util.find_spec(m) is None]
+              if missing:
+                  skipped.append(f"{f} (missing {missing})")
+                  print('SKIP', f, 'missing', missing)
+                  continue
               print('===', f, '===')
               r = subprocess.run([sys.executable, str(f)], timeout=180)
               if r.returncode != 0:
                   failed.append(str(f))
+              else:
+                  ran.append(str(f))
+          print('ran:', ran)
           print('skipped:', skipped)
           if failed:
               print('FAILED', failed)
               raise SystemExit(1)
-          # 防假绿：至少要有 1 个测试文件实际执行（非全 skip）
-          ran = [f for f in files if not any(str(f) in s for s in skipped)]
           if not ran:
               print('HARD FAIL: all tests skipped')
               raise SystemExit(2)
           print('selected tests ok, ran=', len(ran), 'skipped=', len(skipped))
           PY
+
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         continue-on-error: true
