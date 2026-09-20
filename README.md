@@ -565,3 +565,9 @@ exe 里不再有 `.pyw` 文件可以"再拉一个进程"，所以所有拉起同
 ---
 
 **License**: MIT — see [LICENSE](LICENSE).
+
+
+## CI
+
+GitHub Actions（`.github/workflows/ci.yml`）会在 Linux 上跑非 e2e 的 `_test_*.py`；
+壁纸 e2e（`_test_e2e.py`）依赖 Windows 桌面 API，本地执行：`python _test_e2e.py`。
