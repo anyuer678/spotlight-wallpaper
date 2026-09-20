@@ -16,11 +16,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install test deps (best-effort)
+      - name: Install test deps
         run: |
           pip install -U pip
-          pip install pillow || echo "pillow install failed"
-          # playwright 体积大且需浏览器；Linux CI 默认不跑 UI 依赖用例
+          pip install pillow
+          # playwright 仍可选：缺依赖用例 skip，但 pillow 必须装上
       - name: Collect tests
         run: |
           python - <<'PY'
@@ -82,7 +82,12 @@ jobs:
           if failed:
               print('FAILED', failed)
               raise SystemExit(1)
-          print('selected tests ok')
+          # 防假绿：至少要有 1 个测试文件实际执行（非全 skip）
+          ran = [f for f in files if not any(str(f) in s for s in skipped)]
+          if not ran:
+              print('HARD FAIL: all tests skipped')
+              raise SystemExit(2)
+          print('selected tests ok, ran=', len(ran), 'skipped=', len(skipped))
           PY
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
