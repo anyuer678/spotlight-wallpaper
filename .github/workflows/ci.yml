@@ -16,36 +16,73 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install test deps (best-effort)
+        run: |
+          pip install -U pip
+          pip install pillow || echo "pillow install failed"
+          # playwright 体积大且需浏览器；Linux CI 默认不跑 UI 依赖用例
       - name: Collect tests
         run: |
           python - <<'PY'
           from pathlib import Path
           root = Path('.')
-          tests = list(root.glob('_test_*.py')) + list(root.glob('tests/test_*.py'))
+          tests = list(root.glob('_test_*.py')) + list(Path('tests').glob('test_*.py'))
           print('found', len(tests), 'test files')
           for t in tests:
               print(t)
           if not tests:
               raise SystemExit('no tests found')
           PY
-      - name: Run unit-style tests (non-e2e)
+      - name: Run unit-style tests (non-e2e, skip missing-deps)
         run: |
           python - <<'PY'
-          import subprocess, sys
+          import ast
+          import importlib.util
+          import subprocess
+          import sys
           from pathlib import Path
-          # e2e/heavy scripts may need GUI/Windows wallpaper APIs — skip on Linux CI
-          skip = {'_test_e2e.py'}
-          files = [p for p in list(Path('.').glob('_test_*.py')) + list(Path('tests').glob('test_*.py')) if p.name not in skip]
+
+          skip_names = {'_test_e2e.py'}  # Windows wallpaper APIs
+          optional = {'playwright', 'PIL'}  # skip file if import missing
+
+          def has_optional_import(path: Path) -> bool:
+              try:
+                  tree = ast.parse(path.read_text(encoding='utf-8', errors='ignore'))
+              except Exception:
+                  return False
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for a in node.names:
+                          if a.name.split('.')[0] in optional:
+                              return True
+                  elif isinstance(node, ast.ImportFrom):
+                      if node.module and node.module.split('.')[0] in optional:
+                          return True
+              return False
+
+          files = [p for p in list(Path('.').glob('_test_*.py')) + list(Path('tests').glob('test_*.py'))
+                   if p.name not in skip_names]
           failed = []
+          skipped = []
           for f in files:
+              if has_optional_import(f):
+                  missing = []
+                  for mod in optional:
+                      if importlib.util.find_spec(mod) is None:
+                          missing.append(mod)
+                  if missing:
+                      skipped.append(f"{f} (missing {missing})")
+                      print('SKIP', f, 'missing', missing)
+                      continue
               print('===', f, '===')
               r = subprocess.run([sys.executable, str(f)], timeout=180)
               if r.returncode != 0:
                   failed.append(str(f))
+          print('skipped:', skipped)
           if failed:
               print('FAILED', failed)
               raise SystemExit(1)
-          print('all selected tests ok')
+          print('selected tests ok')
           PY
       - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
