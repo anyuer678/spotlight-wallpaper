@@ -571,3 +571,18 @@ exe 里不再有 `.pyw` 文件可以"再拉一个进程"，所以所有拉起同
 
 GitHub Actions（`.github/workflows/ci.yml`）会在 Linux 上跑非 e2e 的 `_test_*.py`；
 壁纸 e2e（`_test_e2e.py`）依赖 Windows 桌面 API，本地执行：`python _test_e2e.py`。
+
+
+## CI 说明（诚实边界）
+
+GitHub Actions（Linux）**只跑** `tests/test_ci_portable.py`（LICENSE/语法/workflow 等可移植检查）。
+
+以下用例 **依赖 Windows**（`panel.pyw` → `win32api` / 桌面壁纸 API），请在本机执行：
+
+```bash
+python _test_panel_api.py
+python _test_preview.py
+python _test_e2e.py
+```
+
+CI 不会在 Linux 上假装这些桌面用例已通过。
