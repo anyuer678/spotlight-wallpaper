@@ -1,5 +1,7 @@
 # 聚光壁纸 · Spotlight Wallpaper
 
+![CI](https://github.com/anyuer678/spotlight-wallpaper/actions/workflows/ci.yml/badge.svg) ![Release](https://img.shields.io/github/v/release/anyuer678/spotlight-wallpaper) ![License](https://img.shields.io/github/license/anyuer678/spotlight-wallpaper) ![Top language](https://img.shields.io/github/languages/top/anyuer678/spotlight-wallpaper)
+
 > 鼠标指向哪里，哪里就"透出"另一幅画。光斑之内一幅图，光斑之外另一幅图。
 
 三个入口，各司其职：
