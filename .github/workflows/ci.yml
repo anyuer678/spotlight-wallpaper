@@ -13,8 +13,8 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install portable test deps
@@ -28,5 +28,5 @@ jobs:
           echo "SKIP on Linux: _test_panel_api.py / _test_preview.py (panel.pyw imports win32api)"
           echo "本地 Windows 请执行: python _test_panel_api.py / _test_preview.py / _test_e2e.py"
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         continue-on-error: true
